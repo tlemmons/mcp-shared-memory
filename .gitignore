@@ -13,6 +13,9 @@ build/
 # Monolith backup
 server_monolith.py
 
+# Local docker compose override
+docker-compose.override.yml
+
 # Debug/utility scripts (local-only)
 audit_messages.py
 check_fields.py

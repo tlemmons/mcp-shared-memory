@@ -1,9 +1,54 @@
 services:
-  mcp-rag-arch:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: mcp-chromadb
+    volumes:
+      - chroma-data:/chroma/chroma
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7
+    container_name: mcp-mongodb
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "${MONGO_PORT:-27018}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-mcp_orch}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-mcp_orchestrator}
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  mcp-server:
     build: .
     container_name: mcp-rag-arch
-    network_mode: host
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
     env_file: .env
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+    ports:
+      - "8080:8080"
     ulimits:
       nofile:
         soft: 65536
@@ -14,4 +59,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+
+volumes:
+  chroma-data:
+  mongo-data:
