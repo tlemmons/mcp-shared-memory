@@ -2,18 +2,19 @@
 
 import json
 from datetime import datetime
-from typing import Optional, List
+from typing import List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.clients import get_chroma
+from shared_memory.config import MAX_CONTENT_SIZE, PROJECT_PREFIX
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection,
+    get_project_collection,
+    get_shared_collection,
     require_session,
 )
-from shared_memory.config import MAX_CONTENT_SIZE, PROJECT_PREFIX
+from shared_memory.state import active_sessions
 
 
 @mcp.tool()
@@ -310,7 +311,7 @@ async def memory_list_specs(
     conditions = [{"type": {"$eq": "spec"}}, {"status": {"$eq": "active"}}]
     if spec_type:
         conditions.append({"spec_type": {"$eq": spec_type}})
-    where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+    _where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
 
     # Search collections
     collections_to_search = []

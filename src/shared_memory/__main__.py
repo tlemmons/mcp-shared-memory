@@ -8,9 +8,9 @@ Usage:
 import argparse
 
 from shared_memory.app import create_app
-from shared_memory.config import CHROMA_HOST, CHROMA_PORT
-from shared_memory.state import active_sessions, file_locks, active_signals
 from shared_memory.clients import get_chroma
+from shared_memory.config import CHROMA_HOST, CHROMA_PORT
+from shared_memory.state import active_sessions, active_signals, file_locks
 
 
 def main():

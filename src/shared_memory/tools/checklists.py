@@ -1,16 +1,15 @@
 """Checklist tools - shared checklists for coordination."""
 
 import json
-import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.clients import get_mongo
 from shared_memory.helpers import require_session
+from shared_memory.state import active_sessions
 
 
 @mcp.tool()

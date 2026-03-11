@@ -5,8 +5,7 @@ These in-memory dictionaries track runtime state that does not need
 persistence -- they are rebuilt each time the server starts.
 """
 
-from typing import Dict, Any
-
+from typing import Any, Dict
 
 # Active sessions stored in memory (lightweight, no persistence needed)
 active_sessions: Dict[str, Dict[str, Any]] = {}

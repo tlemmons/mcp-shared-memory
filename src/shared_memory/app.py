@@ -8,7 +8,6 @@ from mcp.server.fastmcp import FastMCP
 
 from shared_memory.clients import app_lifespan
 
-
 # Allow connections from any host (for remote access via IP or proxy)
 # stateless_http=True fixes -32602 "request before initialization" errors
 # See: https://github.com/GregBaugues/tokenbowl-mcp/issues/86

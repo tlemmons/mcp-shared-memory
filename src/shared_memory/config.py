@@ -7,9 +7,7 @@ definitions extracted from server.py for modular organization.
 
 import os
 import re
-import json
-from typing import Dict, Any
-
+from typing import Any, Dict
 
 # =============================================================================
 # Configuration

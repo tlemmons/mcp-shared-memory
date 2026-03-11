@@ -7,12 +7,14 @@ from typing import List
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions, file_locks
 from shared_memory.helpers import (
-    require_session, normalize_path, is_lock_stale,
-    path_matches_pattern, get_files_in_directory_lock,
+    is_lock_stale,
+    normalize_path,
+    path_matches_pattern,
     release_session_locks,
+    require_session,
 )
+from shared_memory.state import active_sessions, file_locks
 
 
 @mcp.tool()

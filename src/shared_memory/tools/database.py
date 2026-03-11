@@ -2,14 +2,12 @@
 
 import json
 import re
-import pymssql
 from datetime import datetime
-from typing import Optional
 
+import pymssql
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.config import DB_REGISTRY, SQL_BLOCKED_KEYWORDS
 from shared_memory.helpers import require_session
 

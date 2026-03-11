@@ -6,17 +6,17 @@ registering every tool with the FastMCP server instance.
 """
 
 from shared_memory.tools import (  # noqa: F401
-    sessions,
-    query,
-    locking,
-    storage,
-    lifecycle,
     backlog,
-    messaging,
-    functions,
-    search,
-    specs,
-    projects,
     checklists,
     database,
+    functions,
+    lifecycle,
+    locking,
+    messaging,
+    projects,
+    query,
+    search,
+    sessions,
+    specs,
+    storage,
 )

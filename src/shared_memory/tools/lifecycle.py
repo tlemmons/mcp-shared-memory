@@ -2,18 +2,19 @@
 
 import json
 from datetime import datetime
-from typing import Optional, List
+from typing import List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions, active_signals
-from shared_memory.config import WORK_STATUSES, DOC_STATUSES
 from shared_memory.clients import get_chroma
+from shared_memory.config import DOC_STATUSES, WORK_STATUSES
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection,
+    get_project_collection,
+    get_shared_collection,
     require_session,
 )
+from shared_memory.state import active_sessions, active_signals
 
 
 @mcp.tool()
@@ -301,7 +302,7 @@ async def memory_archive_by_tag(
                     "title": meta.get("title", "Untitled"),
                     "collection": col.name
                 })
-        except Exception as e:
+        except Exception:
             continue
 
     return json.dumps({

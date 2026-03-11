@@ -2,21 +2,23 @@
 
 import json
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions, file_locks, active_signals
-from shared_memory.clients import get_chroma, get_mongo
+from shared_memory.clients import get_chroma
+from shared_memory.config import OVERLAP_WINDOW_HOURS, PROJECT_PREFIX, SHARED_PREFIX
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection,
-    require_session, format_status_warning, is_expired,
-    update_access_stats, check_overlap,
     cleanup_stale_signals,
+    format_status_warning,
+    get_project_collection,
+    get_shared_collection,
+    is_expired,
+    require_session,
+    update_access_stats,
 )
-from shared_memory.config import PROJECT_PREFIX, SHARED_PREFIX, OVERLAP_WINDOW_HOURS
-
+from shared_memory.state import active_sessions, active_signals
 
 # Relevance threshold - results below this are excluded
 # Chroma L2 distance: 0 = identical, 1 = quite different, 2+ = very different

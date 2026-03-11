@@ -10,10 +10,14 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 
 from shared_memory.config import (
-    CHROMA_HOST, CHROMA_PORT,
-    MONGO_HOST, MONGO_PORT, MONGO_DB, MONGO_USER, MONGO_PASSWORD,
+    CHROMA_HOST,
+    CHROMA_PORT,
+    MONGO_DB,
+    MONGO_HOST,
+    MONGO_PASSWORD,
+    MONGO_PORT,
+    MONGO_USER,
 )
-
 
 # =============================================================================
 # Chroma Client Setup - Uses AsyncHttpClient for proper connection management
@@ -26,7 +30,6 @@ _chroma_lock = None  # Will be created when needed
 async def _get_or_create_lock():
     """Get or create the asyncio lock for client initialization."""
     global _chroma_lock
-    import asyncio
     if _chroma_lock is None:
         _chroma_lock = asyncio.Lock()
     return _chroma_lock

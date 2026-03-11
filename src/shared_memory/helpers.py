@@ -9,13 +9,15 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from shared_memory.config import (
-    PROJECT_PREFIX, SHARED_PREFIX, OVERLAP_WINDOW_HOURS,
-    STALE_LOCK_MINUTES, SESSION_TTL_DAYS, SIGNAL_RETENTION_HOURS,
-    MAX_CONTENT_SIZE, DEFAULT_EXPIRY_DAYS, MEMORY_TYPES, DOC_STATUSES,
+    DEFAULT_EXPIRY_DAYS,
+    OVERLAP_WINDOW_HOURS,
+    PROJECT_PREFIX,
+    SESSION_TTL_DAYS,
+    SHARED_PREFIX,
+    SIGNAL_RETENTION_HOURS,
+    STALE_LOCK_MINUTES,
 )
-from shared_memory.state import active_sessions, file_locks, active_signals
-from shared_memory.clients import get_chroma
-
+from shared_memory.state import active_sessions, active_signals, file_locks
 
 MIN_RELEVANCE_THRESHOLD = 0.3  # 30% minimum relevance
 

@@ -8,15 +8,22 @@ from typing import List
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.clients import get_chroma, get_mongo
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection, generate_doc_id,
-    require_session, release_session_locks, cleanup_stale_sessions,
-    get_relevant_locks_for_session, get_recent_modifications,
-    get_pending_signals, get_blocking_others, get_interface_updates,
     _match_path_patterns,
+    cleanup_stale_sessions,
+    generate_doc_id,
+    get_blocking_others,
+    get_interface_updates,
+    get_pending_signals,
+    get_project_collection,
+    get_recent_modifications,
+    get_relevant_locks_for_session,
+    get_shared_collection,
+    release_session_locks,
+    require_session,
 )
+from shared_memory.state import active_sessions
 
 
 @mcp.tool()

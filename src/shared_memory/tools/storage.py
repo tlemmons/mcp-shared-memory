@@ -2,20 +2,25 @@
 
 import json
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Dict, List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.clients import get_chroma
-from shared_memory.config import MEMORY_TYPES, MAX_CONTENT_SIZE
+from shared_memory.config import MAX_CONTENT_SIZE, MEMORY_TYPES
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection,
-    generate_doc_id, generate_content_hash, check_duplicate,
-    calculate_expiry, require_session,
-    check_overlap, format_overlap_warning,
+    calculate_expiry,
+    check_duplicate,
+    check_overlap,
+    format_overlap_warning,
+    generate_content_hash,
+    generate_doc_id,
+    get_project_collection,
+    get_shared_collection,
+    require_session,
 )
+from shared_memory.state import active_sessions
 
 
 @mcp.tool()
@@ -85,14 +90,11 @@ async def memory_store(
     # Determine collection
     if project:
         collection = await get_project_collection(chroma, project)
-        location = f"project:{project}"
     else:
         if memory_type in ["pattern", "code_snippet", "solution", "interface"]:
             collection = await get_shared_collection(chroma, "patterns")
-            location = "shared:patterns"
         else:
             collection = await get_shared_collection(chroma, "context")
-            location = "shared:context"
 
     # Check for duplicates (unless force_store or interface update)
     duplicate_warning = None
@@ -225,10 +227,8 @@ async def memory_record_learning(
 
     if project:
         collection = await get_project_collection(chroma, project)
-        location = f"project:{project}"
     else:
         collection = await get_shared_collection(chroma, "patterns")
-        location = "shared:patterns"
 
     doc_id = f"learning_{generate_doc_id(title, 'learning')}"
 

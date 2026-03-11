@@ -1,25 +1,26 @@
 """Function reference tools - register, find, and enrich function references."""
 
 import asyncio
-import json
 import hashlib
+import json
 import os
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.state import active_sessions
 from shared_memory.clients import get_chroma
 from shared_memory.config import PROJECT_PREFIX, SHARED_PREFIX
 from shared_memory.helpers import (
-    get_project_collection, get_shared_collection,
-    generate_doc_id, require_session,
-    calculate_relevance, MIN_RELEVANCE_THRESHOLD,
+    MIN_RELEVANCE_THRESHOLD,
+    calculate_relevance,
+    get_project_collection,
+    get_shared_collection,
+    require_session,
     update_access_stats,
 )
-
+from shared_memory.state import active_sessions
 
 # Enrichment queue for librarian processing (in-memory, processed async)
 # Structure: { func_id: { project, file, name, registered_at, enriched: bool } }
@@ -107,7 +108,6 @@ async def memory_register_function(
     # Check if function already exists and preserve enrichment data
     existing = await collection.get(ids=[func_id], include=["metadatas", "documents"])
     existing_meta = existing["metadatas"][0] if existing["metadatas"] else None
-    existing_doc = existing["documents"][0] if existing["documents"] else None
     is_update = existing_meta is not None
 
     # Build the document content (AI-readable format)
