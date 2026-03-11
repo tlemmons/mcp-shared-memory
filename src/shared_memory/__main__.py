@@ -2,7 +2,7 @@
 Entry point for running as: python -m shared_memory
 
 Usage:
-    python -m shared_memory [--host HOST] [--port PORT]
+    python -m shared_memory [--host HOST] [--port PORT] [--transport TRANSPORT]
 """
 
 import argparse
@@ -17,16 +17,27 @@ def main():
     parser = argparse.ArgumentParser(description="Shared Memory MCP Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port")
+    parser.add_argument(
+        "--transport",
+        choices=["streamable-http", "stdio"],
+        default="streamable-http",
+        help="MCP transport mode (default: streamable-http)",
+    )
     args = parser.parse_args()
 
     mcp = create_app()
+
+    if args.transport == "stdio":
+        transport_line = "║  Transport: stdio"
+    else:
+        transport_line = f"║  Endpoint: http://{args.host}:{args.port}/mcp (stateless HTTP)"
 
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║       Shared Memory MCP Server v1.0.0                        ║
 ║       Multi-Agent Coordination + Knowledge Base              ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Endpoint: http://{args.host}:{args.port}/mcp (stateless HTTP)
+{transport_line}
 ║  Chroma:   {CHROMA_HOST}:{CHROMA_PORT}
 ║                                                              ║
 ║  Session Management:                                         ║
@@ -79,8 +90,8 @@ def main():
             "active_signals": len(active_signals)
         }, status_code=200 if status == "healthy" else 503)
 
-    # Run with streamable HTTP transport
-    mcp.run(transport="streamable-http")
+    # Run with the selected transport
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

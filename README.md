@@ -1,6 +1,7 @@
 # MCP Shared Memory Server
 
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+[![CI](https://github.com/tlemmons/mcp-shared-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/tlemmons/mcp-shared-memory/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11+-green.svg)
 ![MCP Compatible](https://img.shields.io/badge/MCP-compatible-purple.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
@@ -22,15 +23,15 @@
 
 ```mermaid
 graph LR
-    A1[Claude Code] -->|MCP/SSE| S[MCP Shared Memory Server]
-    A2[Cursor] -->|MCP/SSE| S
-    A3[Other MCP Client] -->|MCP/SSE| S
+    A1[Claude Code] -->|MCP/HTTP| S[MCP Shared Memory Server]
+    A2[Cursor] -->|MCP/HTTP| S
+    A3[Other MCP Client] -->|MCP/HTTP| S
     S -->|Vector search| C[(ChromaDB)]
     S -->|Documents & state| M[(MongoDB)]
     S -.->|Optional| E[(External DBs)]
 ```
 
-The server runs as a single Docker Compose stack. AI agents connect over MCP (Server-Sent Events transport on port 8080). All knowledge, messages, and coordination state are persisted across restarts in MongoDB and ChromaDB volumes.
+The server runs as a single Docker Compose stack. AI agents connect over MCP (streamable HTTP transport on port 8080). All knowledge, messages, and coordination state are persisted across restarts in MongoDB and ChromaDB volumes.
 
 ---
 
@@ -64,8 +65,8 @@ Add to `~/.claude.json` (or your project's `.mcp.json`):
 {
   "mcpServers": {
     "shared-memory": {
-      "type": "sse",
-      "url": "http://localhost:8080/sse"
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
@@ -79,8 +80,8 @@ Add to `.cursor/mcp.json` in your project root:
 {
   "mcpServers": {
     "shared-memory": {
-      "type": "sse",
-      "url": "http://localhost:8080/sse"
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
@@ -88,14 +89,39 @@ Add to `.cursor/mcp.json` in your project root:
 
 ### Any MCP-Compatible Client
 
-Point your client to the SSE endpoint:
+Point your client to the MCP endpoint:
 
 ```
-URL:       http://localhost:8080/sse
-Transport: SSE (Server-Sent Events)
+URL:       http://localhost:8080/mcp
+Transport: Streamable HTTP (stateless)
 ```
 
-No API keys or authentication tokens are required for local use.
+**Stdio transport** is also supported for clients that prefer it. Pass `--transport stdio` when starting the server:
+
+```bash
+# From the project root:
+python server.py --transport stdio
+
+# Or as a module (from the src/ directory):
+python -m shared_memory --transport stdio
+```
+
+Example MCP client config for stdio mode:
+
+```json
+{
+  "mcpServers": {
+    "shared-memory": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "shared_memory", "--transport", "stdio"],
+      "cwd": "/path/to/mcp-shared-memory/src"
+    }
+  }
+}
+```
+
+No API keys or authentication tokens are required for local use (see [Security](#security) for remote deployments).
 
 ---
 
@@ -328,9 +354,43 @@ docker compose logs -f mcp-server
 
 ---
 
+## Security
+
+This server is designed for **local or trusted-network use**. It has no built-in authentication.
+
+**If you need remote access**, do not expose port 8080 directly. Instead:
+
+- **Tailscale / WireGuard** — Put the server on a private mesh network. This is the simplest and most secure option.
+- **Reverse proxy with auth** — Use nginx or Caddy with HTTP basic auth, mTLS, or OAuth2 in front of the server.
+- **SSH tunnel** — `ssh -L 8080:localhost:8080 your-server` for ad-hoc remote access.
+
+The `MONGO_PASSWORD` in `.env.example` defaults to `changeme`. The server will start with this value, but **you must change it** for any non-throwaway deployment. MongoDB and ChromaDB ports are also exposed by default in Docker Compose — restrict these with firewall rules if your machine is network-accessible.
+
+---
+
+## CLAUDE.md Files
+
+You'll notice `CLAUDE.md` and `CLAUDE.md.template` in the repo root. These are instruction files for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic's CLI coding tool). They tell Claude Code how to interact with the shared memory server — session naming, startup checklist, etc. If you don't use Claude Code, you can safely ignore these files. The `.template` version is a starting point you can customize for your own projects.
+
+---
+
+## Roadmap
+
+Contributions welcome! These are known gaps that would benefit the project:
+
+- **Authentication and tenant isolation** — API key per project, namespace separation for multi-user deployments
+- **PostgreSQL and MySQL support** — the `memory_db` tool currently supports MSSQL only
+- **Local model support for librarian** — Ollama integration so the enrichment daemon doesn't require a cloud API key
+- **TTL and stale data cleanup** — background pruning of expired sessions, locks, and messages with configurable retention
+- **Data export/backup tooling** — dump and restore scripts for migration and disaster recovery
+
+See [docs/WORKED_EXAMPLE.md](docs/WORKED_EXAMPLE.md) for an end-to-end walkthrough of multi-agent coordination.
+
+---
+
 ## License
 
-MIT License with Personal Ownership Clause. See [LICENSE](LICENSE) for the full text.
+See [LICENSE](LICENSE) for the full text.
 
 Copyright (c) 2024-2026 Thomas Lemmons.
 

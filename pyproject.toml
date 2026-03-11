@@ -7,7 +7,7 @@ name = "mcp-shared-memory"
 version = "1.0.0"
 description = "Shared memory and coordination server for multiple AI coding agents via MCP"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
     {name = "Thomas Lemmons", email = "tom@lemmons.net"},
