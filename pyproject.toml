@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "mcp-shared-memory"
+version = "1.0.0"
+description = "Shared memory and coordination server for multiple AI coding agents via MCP"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Thomas Lemmons", email = "tom@lemmons.net"},
+]
+keywords = ["mcp", "ai", "agents", "coordination", "shared-memory", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "chromadb>=0.4.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.30.0",
+    "starlette>=0.38.0",
+    "pymongo>=4.0.0",
+]
+
+[project.optional-dependencies]
+mssql = ["pymssql>=2.2.0"]
+librarian = ["anthropic", "httpx"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4.0",
+]
+
+[project.urls]
+Repository = "https://github.com/tlemmons/mcp-shared-memory"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
