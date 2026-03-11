@@ -1,0 +1,16 @@
+[Unit]
+Description=Librarian - Function Reference Enrichment Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/mcp-shared-memory
+EnvironmentFile=/opt/mcp-shared-memory/.env
+ExecStart=/usr/bin/python3 /opt/mcp-shared-memory/librarian.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

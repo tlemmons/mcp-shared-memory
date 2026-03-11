@@ -1,0 +1,37 @@
+# Environment & credentials
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Debug/utility scripts (local-only)
+audit_messages.py
+check_fields.py
+check_sessions.py
+cleanup_registry.py
+debug_msg.py
+find_msg.py
+seed_registry.py
+show_registry.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log

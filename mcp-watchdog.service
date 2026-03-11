@@ -1,0 +1,14 @@
+[Unit]
+Description=MCP Shared Memory Server Watchdog
+After=mcp-rag-arch.service
+Requires=mcp-rag-arch.service
+
+[Service]
+Type=simple
+# UPDATE: Set ExecStart to your install path
+ExecStart=/opt/mcp-shared-memory/watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

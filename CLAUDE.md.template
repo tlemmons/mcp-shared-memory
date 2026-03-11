@@ -1,0 +1,43 @@
+# Project: [PROJECT_NAME]
+
+## Claude Identity
+
+name: main
+project: [project_name]
+
+## Team Members
+
+Valid assignees for this project:
+- human - architecture decisions, approvals, requirements
+- main - general development, primary Claude instance
+
+Add more as needed:
+- backend - API, database, server-side logic
+- frontend - UI, components, styling
+- infra - deployment, docker, monitoring
+
+## Project Context
+
+[Brief description of what this project does]
+
+## Key Files
+
+[List important files and directories]
+
+## Conventions
+
+[Any project-specific coding conventions, test requirements, commit formats]
+
+---
+
+## Shared Memory (Auto-inherited from global CLAUDE.md)
+
+For detailed usage guide:
+```
+memory_query(session_id="...", query="shared memory usage guide")
+```
+
+For project CLAUDE.md template:
+```
+memory_query(session_id="...", query="project CLAUDE.md template")
+```

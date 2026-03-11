@@ -1,0 +1,17 @@
+services:
+  mcp-rag-arch:
+    build: .
+    container_name: mcp-rag-arch
+    network_mode: host
+    env_file: .env
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

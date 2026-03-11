@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+        }
+        .header {
+            background: #16213e;
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 {
+            color: #00d9ff;
+            font-size: 1em;
+            font-weight: 500;
+        }
+        .header .status {
+            font-size: 0.85em;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+        .status.connected { background: #22c55e; color: #000; }
+        .status.disconnected { background: #f87171; color: #000; }
+        .status.connecting { background: #fbbf24; color: #000; }
+        #terminal-container {
+            flex: 1;
+            padding: 5px;
+            background: #000;
+        }
+        .controls {
+            background: #16213e;
+            padding: 8px 15px;
+            display: flex;
+            gap: 10px;
+            border-top: 1px solid #0f3460;
+        }
+        button {
+            background: #0f3460;
+            color: #fff;
+            border: 1px solid #00d9ff;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover { background: #00d9ff; color: #1a1a2e; }
+        button.danger { border-color: #f87171; }
+        button.danger:hover { background: #f87171; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1 id="title">Agent Terminal</h1>
+        <span id="status" class="status connecting">Connecting...</span>
+    </div>
+    <div id="terminal-container"></div>
+    <div class="controls">
+        <button onclick="reconnect()">Reconnect</button>
+        <button onclick="clearTerminal()">Clear</button>
+        <button class="danger" onclick="window.close()">Close</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script>
+        // Get target from URL params
+        const params = new URLSearchParams(window.location.search);
+        const session = params.get('session');
+        const windowName = params.get('window');
+        const target = `${session}:${windowName}`;
+
+        document.getElementById('title').textContent = `${session} / ${windowName}`;
+        document.title = `${windowName} - ${session}`;
+
+        // Initialize xterm.js
+        const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            theme: {
+                background: '#000000',
+                foreground: '#00ff00',
+                cursor: '#00ff00',
+                cursorAccent: '#000000'
+            },
+            scrollback: 5000
+        });
+
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+
+        const container = document.getElementById('terminal-container');
+        term.open(container);
+        fitAddon.fit();
+
+        // Resize on window resize
+        window.addEventListener('resize', () => fitAddon.fit());
+
+        let ws = null;
+        let reconnecting = false;
+
+        function setStatus(status) {
+            const el = document.getElementById('status');
+            el.className = 'status ' + status;
+            el.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        }
+
+        function connect() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            setStatus('connecting');
+
+            // Use WebSocket for bidirectional communication
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/terminal/${session}/${windowName}`;
+            console.log('Connecting to:', wsUrl);
+            console.log('Session:', session, 'Window:', windowName);
+
+            if (!session || !windowName) {
+                console.error('Missing session or window parameters!');
+                setStatus('disconnected');
+                term.write('\r\n\x1b[31mError: Missing session or window parameters in URL\x1b[0m\r\n');
+                return;
+            }
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket opened');
+                setStatus('connected');
+                term.focus();
+                // Send initial terminal size
+                sendResize();
+            };
+
+            function sendResize() {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const cols = term.cols;
+                    const rows = term.rows;
+                    console.log('Sending resize:', cols, 'x', rows);
+                    ws.send(`\x00RESIZE:${cols}:${rows}\x00`);
+                }
+            }
+
+            // Send resize when terminal is resized
+            term.onResize(({ cols, rows }) => {
+                console.log('Terminal resized to:', cols, 'x', rows);
+                sendResize();
+            });
+
+            ws.onmessage = (event) => {
+                console.log('Received:', event.data.length, 'chars');
+                console.log('First 200:', event.data.substring(0, 200));
+                // Convert \n to \r\n for proper terminal display
+                const data = event.data.replace(/\n/g, '\r\n');
+                term.write(data);
+            };
+
+            ws.onclose = () => {
+                setStatus('disconnected');
+                if (!reconnecting) {
+                    setTimeout(() => {
+                        reconnecting = true;
+                        connect();
+                        reconnecting = false;
+                    }, 3000);
+                }
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                console.error('WebSocket state:', ws.readyState);
+                setStatus('disconnected');
+                term.write('\r\n\x1b[31mWebSocket connection error\x1b[0m\r\n');
+            };
+        }
+
+        // Send keyboard input to tmux
+        term.onData((data) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // Map special keys
+                if (data === '\r') {
+                    // Enter key - send as special command
+                    ws.send('\x00ENTER\x00');
+                } else if (data === '\x7f') {
+                    // Backspace
+                    ws.send('\x00BACKSPACE\x00');
+                } else if (data === '\x1b[A') {
+                    ws.send('\x00UP\x00');
+                } else if (data === '\x1b[B') {
+                    ws.send('\x00DOWN\x00');
+                } else if (data === '\x1b[C') {
+                    ws.send('\x00RIGHT\x00');
+                } else if (data === '\x1b[D') {
+                    ws.send('\x00LEFT\x00');
+                } else if (data === '\x03') {
+                    // Ctrl+C
+                    ws.send('\x00CTRLC\x00');
+                } else {
+                    ws.send(data);
+                }
+            }
+        });
+
+        function reconnect() {
+            if (ws) ws.close();
+            setTimeout(connect, 100);
+        }
+
+        function clearTerminal() {
+            term.clear();
+        }
+
+        // Initial connection
+        connect();
+    </script>
+</body>
+</html>

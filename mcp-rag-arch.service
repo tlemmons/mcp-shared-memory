@@ -1,0 +1,20 @@
+[Unit]
+Description=MCP Shared Memory Server (Docker)
+Requires=docker.service
+After=docker.service network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# UPDATE: Set WorkingDirectory to your install path
+WorkingDirectory=/opt/mcp-shared-memory
+ExecStart=/opt/mcp-shared-memory/start.sh
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose restart
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
