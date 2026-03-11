@@ -1,0 +1,400 @@
+"""Session management tools - start and end Claude sessions."""
+
+import json
+import uuid
+from datetime import datetime
+from typing import List
+
+from mcp.server.fastmcp import Context
+
+from shared_memory.app import mcp
+from shared_memory.state import active_sessions
+from shared_memory.clients import get_chroma, get_mongo
+from shared_memory.helpers import (
+    get_project_collection, get_shared_collection, generate_doc_id,
+    require_session, release_session_locks, cleanup_stale_sessions,
+    get_relevant_locks_for_session, get_recent_modifications,
+    get_pending_signals, get_blocking_others, get_interface_updates,
+    _match_path_patterns,
+)
+
+
+@mcp.tool()
+async def memory_start_session(
+    project: str,
+    claude_instance: str = "unknown",
+    task_description: str = "",
+    tmux_target: str = None,
+    role_description: str = None,
+    working_directory: str = None,
+    spawned_by: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    START HERE - Call this first before any other memory tools.
+
+    Registers your session and returns:
+    - Your session ID (required for all other calls)
+    - Recent relevant learnings for your project
+    - Active work by other Claudes (avoid conflicts)
+    - Handoff notes from previous sessions
+    - Active file locks in your working area
+    - Signals from other agents (completion notifications)
+    - Who you might be blocking
+    - Interface updates since your last session
+
+    You MUST call this at the start of your work.
+
+    Args:
+        project: Project you're working on (e.g., 'emailtriage', 'nimbus')
+        claude_instance: Identifier for this Claude instance (e.g., 'main', 'agent-1')
+        task_description: Brief description of what you're about to work on
+        tmux_target: tmux target for message injection (e.g., 'emailtriage:frontend.0')
+        role_description: What this agent does (e.g., 'Core triage/classification engine').
+            Set once - persists across sessions. Other agents can discover you via memory_list_agents.
+        working_directory: Your working directory path. Used to auto-identify your agent name
+            if path patterns are registered for this project.
+        spawned_by: Parent agent that spawned this worker (for worker tier agents).
+    """
+    # Cleanup stale sessions on each new session start
+    cleanup_stale_sessions()
+
+    # Normalize project name
+    normalized_project = project.lower().replace("-", "_").replace(" ", "_")
+
+    # ── Registry awareness ──
+    _needs_role_description = False
+    _registry_warning = None
+    _identity_suggestion = None
+    _is_worker = False
+
+    try:
+        db = get_mongo()
+        if db is not None:
+            registered_project = db.projects.find_one({"name": normalized_project})
+
+            # Path-to-identity: if instance is unknown and working_directory provided,
+            # try to match against registered path patterns
+            if claude_instance == "unknown" and working_directory and registered_project:
+                agents = list(db.registered_agents.find(
+                    {"project": normalized_project, "path_patterns": {"$ne": []}},
+                    {"name": 1, "path_patterns": 1}
+                ))
+                for agent in agents:
+                    if _match_path_patterns(working_directory, agent.get("path_patterns", [])):
+                        _identity_suggestion = agent["name"]
+                        break
+
+            # Check if agent is registered (for named agents)
+            if registered_project and claude_instance != "unknown":
+                registered_agent = db.registered_agents.find_one({
+                    "project": normalized_project,
+                    "name": claude_instance
+                })
+                if registered_agent:
+                    # Update last_seen on the registered agent
+                    db.registered_agents.update_one(
+                        {"project": normalized_project, "name": claude_instance},
+                        {"$set": {"last_seen": datetime.now()}, "$inc": {"session_count": 1}}
+                    )
+                else:
+                    # Agent not registered in project registry
+                    if claude_instance.startswith("worker_") or spawned_by:
+                        # Worker self-registration - limited capabilities
+                        _is_worker = True
+                    else:
+                        # Named agent not registered - warn
+                        valid_agents = [a["name"] for a in db.registered_agents.find(
+                            {"project": normalized_project}, {"name": 1}
+                        )]
+                        _registry_warning = (
+                            f"Agent '{claude_instance}' is not registered in project '{normalized_project}'. "
+                            f"You can send messages and add backlog/learnings, but cannot receive messages. "
+                            f"Ask a project admin to register you with: "
+                            f"memory_project(action='add_agent', name='{normalized_project}', agent='{claude_instance}'). "
+                            f"Registered agents: {', '.join(valid_agents) if valid_agents else 'none'}"
+                        )
+
+            # Worker self-registration
+            if _is_worker or spawned_by:
+                _is_worker = True
+                if not claude_instance.startswith("worker_"):
+                    claude_instance = f"worker_{uuid.uuid4().hex[:4]}"
+
+            # Auto-register in agent directory (activity tracking, separate from registry)
+            update_fields = {
+                "last_seen": datetime.now(),
+                "last_task": task_description or "",
+            }
+            if tmux_target:
+                update_fields["tmux_target"] = tmux_target
+            if role_description:
+                update_fields["role_description"] = role_description
+            if spawned_by:
+                update_fields["spawned_by"] = spawned_by
+
+            insert_defaults = {"first_seen": datetime.now()}
+            if not role_description:
+                insert_defaults["role_description"] = ""
+
+            db.agent_directory.update_one(
+                {"project": normalized_project, "instance": claude_instance},
+                {
+                    "$set": update_fields,
+                    "$inc": {"session_count": 1},
+                    "$setOnInsert": insert_defaults
+                },
+                upsert=True
+            )
+
+            # Check if agent still needs a role_description
+            if not role_description and not _is_worker:
+                existing = db.agent_directory.find_one(
+                    {"project": normalized_project, "instance": claude_instance}
+                )
+                if existing and not existing.get("role_description"):
+                    _needs_role_description = True
+    except Exception as e:
+        print(f"[MCP] Agent directory/registry check failed (non-fatal): {e}")
+
+    chroma = await get_chroma()
+
+    # Generate session ID
+    session_id = f"{project}_{claude_instance}_{uuid.uuid4().hex[:8]}"
+
+    # Register session
+    active_sessions[session_id] = {
+        "project": project,
+        "claude_instance": claude_instance,
+        "task": task_description,
+        "started": datetime.now().isoformat(),
+        "last_activity": datetime.now().isoformat(),
+        "blocked_by": None,
+        "blocked_reason": None,
+        "waiting_for_signal": None,
+        "tmux_target": tmux_target
+    }
+
+    # Gather context for this Claude - keep output compact
+    output = {
+        "session_id": session_id,
+        "project": project
+    }
+
+    # Get recent learnings for this project
+    try:
+        proj_collection = await get_project_collection(chroma, project)
+        recent_learnings = await proj_collection.query(
+            query_texts=[task_description or "recent learnings"],
+            n_results=3,
+            where={"type": {"$in": ["learning", "gotcha", "handoff"]}}
+        )
+
+        if recent_learnings["documents"] and recent_learnings["documents"][0]:
+            # Compact: just titles
+            titles = [meta.get("title") for meta in recent_learnings["metadatas"][0]]
+            if titles:
+                output["learnings"] = titles
+    except Exception:
+        pass
+
+    # Get shared patterns - just titles, skip if none
+    try:
+        shared = await get_shared_collection(chroma, "patterns")
+        patterns = await shared.query(
+            query_texts=[task_description or project],
+            n_results=2
+        )
+        if patterns["documents"] and patterns["documents"][0]:
+            titles = [meta.get("title") for meta in patterns["metadatas"][0]]
+            if titles:
+                output["patterns"] = titles
+    except Exception:
+        pass
+
+    # Get active work by other Claudes - compact format, capped at 20
+    other_active = []
+    for sid, info in active_sessions.items():
+        if sid != session_id:
+            other_active.append(f"{info['claude_instance']}@{info['project']}: {info['task'][:50]}")
+            if len(other_active) >= 20:
+                break
+
+    if other_active:
+        output["other_claudes"] = other_active
+
+    # NEW: Get relevant file locks
+    relevant_locks = get_relevant_locks_for_session(session_id, project)
+    if relevant_locks:
+        output["relevant_locks"] = relevant_locks
+
+    # NEW: Get recent file modifications by others
+    recent_mods = await get_recent_modifications(chroma, project, session_id)
+    if recent_mods:
+        output["recent_modifications"] = recent_mods
+
+    # NEW: Get pending signals (completion notifications)
+    signals = get_pending_signals(claude_instance)
+    if signals:
+        output["signals"] = signals
+
+    # NEW: Check if you're blocking others
+    blocking = get_blocking_others(claude_instance)
+    if blocking:
+        output["blocking_others"] = blocking
+
+    # NEW: Get interface updates
+    interface_updates = await get_interface_updates(chroma, project)
+    if interface_updates:
+        output["interface_updates"] = interface_updates
+
+    # ── Registry-awareness output ──
+
+    # Identity suggestion from path matching
+    if _identity_suggestion:
+        output["identity_suggestion"] = {
+            "suggested_name": _identity_suggestion,
+            "reason": f"Your working directory matches the path pattern for '{_identity_suggestion}'. "
+                      f"Call memory_start_session again with claude_instance='{_identity_suggestion}' to use this identity."
+        }
+
+    # Registry warning (unregistered named agent)
+    if _registry_warning:
+        output["registry_warning"] = _registry_warning
+
+    # Worker info
+    if _is_worker:
+        output["worker"] = {
+            "auto_id": claude_instance,
+            "spawned_by": spawned_by or "unknown",
+            "note": "You are a worker agent. You can add backlog items and learnings but cannot receive messages. "
+                    "Your session will auto-expire."
+        }
+
+    # Nudge agents without a role_description to register one
+    if _needs_role_description:
+        output["action_needed"] = (
+            "You have no role_description in the agent directory. "
+            "Other agents cannot discover what you do. Please call "
+            "memory_start_session again with role_description='brief description of your role and capabilities' "
+            "or ask the user what your role should be."
+        )
+
+    # Always include a tip pointing to the usage guide
+    output["tip"] = "New? Run memory_query(query='shared memory usage guide') for best practices and backlog tools."
+
+    return json.dumps(output)
+
+
+@mcp.tool()
+async def memory_end_session(
+    session_id: str,
+    summary: str,
+    files_modified: List[str] = None,
+    learnings: str = None,
+    handoff_notes: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    CALL THIS WHEN DONE - Records your work and cleans up session.
+
+    This stores:
+    - Summary of what you accomplished (as handoff for next Claude)
+    - Files you modified (for overlap detection)
+    - Any learnings you want to share
+
+    Args:
+        session_id: Your session ID from memory_start_session
+        summary: Summary of what you accomplished
+        files_modified: List of files you modified
+        learnings: Any learnings worth recording for other Claudes
+        handoff_notes: Notes for the next Claude who works on this
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    files_modified = files_modified or []
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = datetime.now().isoformat()
+
+    # Store handoff note
+    proj_collection = await get_project_collection(chroma, session_info["project"])
+
+    handoff_content = f"""## Session Summary
+{summary}
+
+## Files Modified
+{chr(10).join('- ' + f for f in files_modified) if files_modified else 'None recorded'}
+
+## Handoff Notes
+{handoff_notes or 'None'}
+
+## Session Info
+- Claude: {session_info['claude_instance']}
+- Started: {session_info['started']}
+- Ended: {now}
+"""
+
+    handoff_id = f"handoff_{session_id}"
+    await proj_collection.upsert(
+        ids=[handoff_id],
+        documents=[handoff_content],
+        metadatas=[{
+            "title": f"Handoff: {session_info['task'][:50]}",
+            "type": "handoff",
+            "status": "active",
+            "session_id": session_id,
+            "claude_instance": session_info["claude_instance"],
+            "files_modified": json.dumps(files_modified),
+            "created": now,
+            "updated": now
+        }]
+    )
+
+    # Store learning if provided
+    if learnings:
+        learning_id = generate_doc_id(learnings, "learning")
+        await proj_collection.add(
+            ids=[learning_id],
+            documents=[learnings],
+            metadatas=[{
+                "title": f"Learning from {session_info['claude_instance']}",
+                "type": "learning",
+                "status": "active",
+                "session_id": session_id,
+                "created": now,
+                "updated": now
+            }]
+        )
+
+    # Update work item to completed
+    work_collection = await get_shared_collection(chroma, "work")
+    work_id = f"work_{session_id}"
+    await work_collection.upsert(
+        ids=[work_id],
+        documents=[summary],
+        metadatas=[{
+            "title": session_info["task"][:100],
+            "status": "completed",
+            "session_id": session_id,
+            "claude_instance": session_info["claude_instance"],
+            "project": session_info["project"],
+            "files_touched": json.dumps(files_modified),
+            "created": session_info["started"],
+            "updated": now
+        }]
+    )
+
+    # Auto-release any file locks held by this session
+    released_locks = release_session_locks(session_id)
+
+    # Remove from active sessions
+    del active_sessions[session_id]
+
+    result = {"status": "ended"}
+    if released_locks:
+        result["released_locks"] = released_locks
+
+    return json.dumps(result)

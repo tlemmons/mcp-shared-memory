@@ -1,0 +1,135 @@
+"""
+Configuration constants for the Shared Memory MCP Server.
+
+All configuration values, environment-driven settings, and constant
+definitions extracted from server.py for modular organization.
+"""
+
+import os
+import re
+import json
+from typing import Dict, Any
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8001"))
+
+# MongoDB configuration
+MONGO_HOST = os.getenv("MONGO_HOST", "localhost")
+MONGO_PORT = int(os.getenv("MONGO_PORT", "27018"))
+MONGO_DB = os.getenv("MONGO_DB", "mcp_orchestrator")
+MONGO_USER = os.getenv("MONGO_USER", "mcp_orch")
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
+
+# Database registry - external databases available for querying
+# Built dynamically from environment variables with prefix DB_<NAME>_*
+# Example: DB_MYDB_TYPE=mssql, DB_MYDB_HOST=server.com, DB_MYDB_PORT=1433, etc.
+DB_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+def _build_db_registry():
+    """Build DB_REGISTRY from DB_<NAME>_TYPE env vars."""
+    seen = set()
+    for key in os.environ:
+        if key.startswith("DB_") and key.endswith("_TYPE"):
+            name = key[3:-5].lower()  # DB_NIMBUS_TYPE -> nimbus
+            if name not in seen:
+                seen.add(name)
+                prefix = f"DB_{name.upper()}_"
+                DB_REGISTRY[name] = {
+                    "type": os.getenv(f"{prefix}TYPE", "mssql"),
+                    "host": os.getenv(f"{prefix}HOST", ""),
+                    "port": int(os.getenv(f"{prefix}PORT", "1433")),
+                    "database": os.getenv(f"{prefix}NAME", ""),
+                    "user": os.getenv(f"{prefix}USER", ""),
+                    "password": os.getenv(f"{prefix}PASS", ""),
+                    "read_only": os.getenv(f"{prefix}READONLY", "true").lower() == "true",
+                    "query_timeout": int(os.getenv(f"{prefix}TIMEOUT", "30")),
+                    "max_rows": int(os.getenv(f"{prefix}MAX_ROWS", "500")),
+                }
+
+_build_db_registry()
+
+# SQL keywords that are NEVER allowed in read-only mode
+SQL_BLOCKED_KEYWORDS = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|EXEC|EXECUTE|MERGE|'
+    r'GRANT|REVOKE|DENY|BACKUP|RESTORE|SHUTDOWN|KILL|RECONFIGURE|'
+    r'DBCC|BULK|OPENROWSET|OPENQUERY|xp_|sp_)\b',
+    re.IGNORECASE
+)
+
+# Collection naming
+PROJECT_PREFIX = "proj_"      # proj_emailtriage, proj_nimbus
+SHARED_PREFIX = "shared_"     # shared_patterns, shared_context
+
+# Overlap detection window
+OVERLAP_WINDOW_HOURS = 24
+
+# Stale lock timeout (30 minutes of no activity = stale)
+STALE_LOCK_MINUTES = 30
+
+# Session TTL - auto-expire sessions with no activity for this many days
+SESSION_TTL_DAYS = 14
+
+# Signal retention (24 hours)
+SIGNAL_RETENTION_HOURS = 24
+
+# Valid memory types
+MEMORY_TYPES = [
+    "api_spec", "architecture", "component", "config",  # Architecture
+    "adr",  # Decisions
+    "learning", "pattern", "gotcha",  # Learnings
+    "code_snippet", "solution",  # Code
+    "task_context", "handoff", "work_item",  # Task/Work
+    "interface",  # Structured interface contracts
+    "function_ref",  # AI-optimized function references
+    "spec"  # Versioned specs with owner-only updates
+]
+
+# Valid doc statuses
+DOC_STATUSES = ["active", "deprecated", "superseded", "archived", "conflicted", "review_pending", "expired"]
+
+# Content size limit (50KB)
+MAX_CONTENT_SIZE = 50 * 1024
+
+# Default expiry days by memory type (None = never expires)
+# Doubled from original values to accommodate part-time usage
+DEFAULT_EXPIRY_DAYS = {
+    "learning": 180,      # 6 months (was 90)
+    "gotcha": 180,        # 6 months (was 90)
+    "task_context": 60,   # 2 months (was 30)
+    "handoff": 28,        # 4 weeks (was 14)
+    "work_item": 14,      # 2 weeks (was 7)
+    # These don't expire by default
+    "api_spec": None,
+    "architecture": None,
+    "component": None,
+    "config": None,
+    "adr": None,
+    "pattern": None,
+    "code_snippet": None,
+    "solution": None,
+    "interface": None,
+    "spec": None,  # Specs never expire
+}
+
+# Valid work statuses
+WORK_STATUSES = ["in_progress", "blocked", "completed", "abandoned"]
+
+# Backlog item statuses
+BACKLOG_STATUSES = ["open", "in_progress", "deferred", "done", "wont_do", "retest", "blocked", "duplicate", "needs_info"]
+
+# Backlog priorities
+BACKLOG_PRIORITIES = ["critical", "high", "medium", "low"]
+
+# Message priorities (queue now in MongoDB)
+MESSAGE_PRIORITIES = ["urgent", "normal", "low"]
+
+# Message categories
+MESSAGE_CATEGORIES = ["contract", "task", "question", "info", "review", "blocker"]
+
+# Message statuses for full lifecycle tracking
+MESSAGE_STATUSES = ["pending", "delivered", "received", "completed", "failed"]

@@ -10,6 +10,9 @@ __pycache__/
 dist/
 build/
 
+# Monolith backup
+server_monolith.py
+
 # Debug/utility scripts (local-only)
 audit_messages.py
 check_fields.py

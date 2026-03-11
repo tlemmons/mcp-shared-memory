@@ -1,0 +1,376 @@
+"""Backlog management tools - track tasks for humans and agents."""
+
+import json
+import uuid
+from datetime import datetime
+from typing import Optional, List
+
+from mcp.server.fastmcp import Context
+
+from shared_memory.app import mcp
+from shared_memory.state import active_sessions
+from shared_memory.config import BACKLOG_STATUSES, BACKLOG_PRIORITIES
+from shared_memory.clients import get_mongo
+from shared_memory.helpers import require_session
+
+
+@mcp.tool()
+async def memory_add_backlog_item(
+    session_id: str,
+    title: str,
+    description: str,
+    priority: str = "medium",
+    project: str = None,
+    assigned_to: str = None,
+    tags: List[str] = None,
+    target_version: str = None,
+    deferred_reason: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    Add an item to the backlog for future work.
+
+    Use this to track:
+    - Features to implement later
+    - Tech debt to address
+    - Ideas to explore
+    - Tasks for other agents
+
+    Args:
+        session_id: Your session ID
+        title: Short title for the backlog item
+        description: Detailed description of what needs to be done
+        priority: Priority level (critical, high, medium, low) - default medium
+        project: Project this belongs to (omit for cross-project items)
+        assigned_to: Agent/team this is assigned to (e.g., "triage-team", "gmail-team")
+        tags: Tags for categorization (e.g., ["tech-debt", "v7"])
+        target_version: Target version/release for this item (e.g., "v6.1", "sprint-5")
+        deferred_reason: Reason for deferring (when status is deferred)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    if priority not in BACKLOG_PRIORITIES:
+        return json.dumps({"error": f"Invalid priority. Must be one of: {BACKLOG_PRIORITIES}"})
+
+    tags = tags or []
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = datetime.now().isoformat()
+
+    # Store in project collection if specified, otherwise shared
+    if project:
+        collection = await get_project_collection(chroma, project)
+    else:
+        collection = await get_shared_collection(chroma, "work")
+
+    # Generate ID
+    backlog_id = f"backlog_{hashlib.sha256(f'{title}:{now}'.encode()).hexdigest()[:12]}"
+
+    content = f"# {title}\n\n{description}"
+
+    metadata = {
+        "title": title,
+        "type": "backlog",
+        "backlog_status": "open",
+        "priority": priority,
+        "project": project or "",
+        "assigned_to": assigned_to or "",
+        "tags": json.dumps(tags),
+        "target_version": target_version or "",
+        "deferred_reason": deferred_reason or "",
+        "created_by": session_info["claude_instance"],
+        "created": now,
+        "updated": now
+    }
+
+    await collection.add(
+        ids=[backlog_id],
+        documents=[content],
+        metadatas=[metadata]
+    )
+
+    return json.dumps({
+        "status": "added",
+        "id": backlog_id,
+        "title": title,
+        "priority": priority,
+        "project": project or "shared",
+        "assigned_to": assigned_to,
+        "target_version": target_version,
+        "deferred_reason": deferred_reason
+    })
+
+
+@mcp.tool()
+async def memory_list_backlog(
+    session_id: str,
+    project: str = None,
+    status: str = None,
+    priority: str = None,
+    assigned_to: str = None,
+    target_version: str = None,
+    include_done: bool = False,
+    ctx: Context = None
+) -> str:
+    """
+    List backlog items with optional filters.
+
+    Args:
+        session_id: Your session ID
+        project: Filter by project (omit for all projects + shared)
+        status: Filter by status (open, in_progress, deferred, done, wont_do, retest, blocked, duplicate, needs_info)
+        priority: Filter by priority (critical, high, medium, low)
+        assigned_to: Filter by assignee
+        target_version: Filter by milestone/version (e.g., "meural-beta", "v2.0", "sprint-5")
+        include_done: Include completed items (default False)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    if status and status not in BACKLOG_STATUSES:
+        return json.dumps({"error": f"Invalid status. Must be one of: {BACKLOG_STATUSES}"})
+    if priority and priority not in BACKLOG_PRIORITIES:
+        return json.dumps({"error": f"Invalid priority. Must be one of: {BACKLOG_PRIORITIES}"})
+
+    chroma = await get_chroma()
+    items = []
+
+    # Get collections to search
+    collections = await chroma.list_collections()
+    target_collections = []
+
+    for col in collections:
+        if project:
+            if col.name == f"{PROJECT_PREFIX}{project.lower().replace('-', '_')}":
+                target_collections.append(col)
+        else:
+            # All project and shared collections
+            if col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX):
+                target_collections.append(col)
+
+    # Priority order for sorting
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+    for col in target_collections:
+        try:
+            # Get all backlog items
+            results = await col.get(
+                where={"type": "backlog"},
+                include=["metadatas", "documents"]
+            )
+
+            for i, meta in enumerate(results["metadatas"]):
+                item_status = meta.get("backlog_status", "open")
+                item_priority = meta.get("priority", "medium")
+                item_assigned = meta.get("assigned_to", "")
+
+                # Apply filters
+                if status and item_status != status:
+                    continue
+                if priority and item_priority != priority:
+                    continue
+                if assigned_to and item_assigned != assigned_to:
+                    continue
+                if target_version and meta.get("target_version", "") != target_version:
+                    continue
+                if not include_done and item_status in ["done", "wont_do"]:
+                    continue
+
+                items.append({
+                    "id": results["ids"][i],
+                    "title": meta.get("title", "Untitled"),
+                    "status": item_status,
+                    "priority": item_priority,
+                    "priority_order": priority_order.get(item_priority, 99),
+                    "project": meta.get("project", "shared"),
+                    "assigned_to": item_assigned or None,
+                    "target_version": meta.get("target_version") or None,
+                    "deferred_reason": meta.get("deferred_reason") or None,
+                    "created_by": meta.get("created_by", "unknown"),
+                    "created": meta.get("created"),
+                    "updated": meta.get("updated"),
+                    "tags": json.loads(meta.get("tags", "[]"))
+                })
+        except Exception:
+            continue
+
+    # Sort by priority (critical first), then by created date
+    items.sort(key=lambda x: (x["priority_order"], x["created"]))
+
+    # Remove priority_order from output
+    for item in items:
+        del item["priority_order"]
+
+    return json.dumps({
+        "count": len(items),
+        "items": items
+    }, indent=2)
+
+
+@mcp.tool()
+async def memory_update_backlog_item(
+    session_id: str,
+    item_id: str,
+    status: str = None,
+    priority: str = None,
+    assigned_to: str = None,
+    title: str = None,
+    description: str = None,
+    target_version: str = None,
+    deferred_reason: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    Update a backlog item's status, priority, or assignment.
+
+    Args:
+        session_id: Your session ID
+        item_id: The backlog item ID
+        status: New status (open, in_progress, deferred, done, wont_do, retest, blocked, duplicate, needs_info)
+        priority: New priority (critical, high, medium, low)
+        assigned_to: New assignee (use empty string to unassign)
+        title: New title
+        description: New description
+        target_version: Target version/release (e.g., "v6.1", "sprint-5")
+        deferred_reason: Reason for deferring (when status is deferred)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    if status and status not in BACKLOG_STATUSES:
+        return json.dumps({"error": f"Invalid status. Must be one of: {BACKLOG_STATUSES}"})
+    if priority and priority not in BACKLOG_PRIORITIES:
+        return json.dumps({"error": f"Invalid priority. Must be one of: {BACKLOG_PRIORITIES}"})
+
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = datetime.now().isoformat()
+
+    # Search all collections for this item
+    collections = await chroma.list_collections()
+    found = False
+
+    for col in collections:
+        if not (col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX)):
+            continue
+
+        try:
+            result = await col.get(ids=[item_id], include=["metadatas", "documents"])
+            if result["ids"]:
+                meta = result["metadatas"][0]
+                doc = result["documents"][0]
+
+                # Update fields
+                if status:
+                    meta["backlog_status"] = status
+                if priority:
+                    meta["priority"] = priority
+                if assigned_to is not None:
+                    meta["assigned_to"] = assigned_to
+                if title:
+                    meta["title"] = title
+                    # Update document too
+                    doc = f"# {title}\n\n" + doc.split("\n\n", 1)[-1] if "\n\n" in doc else f"# {title}\n\n{doc}"
+                if description:
+                    doc = f"# {meta['title']}\n\n{description}"
+                if target_version is not None:
+                    meta["target_version"] = target_version
+                if deferred_reason is not None:
+                    meta["deferred_reason"] = deferred_reason
+
+                meta["updated"] = now
+                meta["updated_by"] = session_info["claude_instance"]
+
+                await col.update(
+                    ids=[item_id],
+                    documents=[doc] if (title or description) else None,
+                    metadatas=[meta]
+                )
+
+                found = True
+                return json.dumps({
+                    "status": "updated",
+                    "id": item_id,
+                    "title": meta["title"],
+                    "backlog_status": meta.get("backlog_status"),
+                    "priority": meta.get("priority"),
+                    "assigned_to": meta.get("assigned_to") or None,
+                    "target_version": meta.get("target_version") or None,
+                    "deferred_reason": meta.get("deferred_reason") or None
+                })
+        except Exception:
+            continue
+
+    if not found:
+        return json.dumps({"error": f"Backlog item not found: {item_id}"})
+
+
+@mcp.tool()
+async def memory_complete_backlog_item(
+    session_id: str,
+    item_id: str,
+    resolution: str = None,
+    wont_do: bool = False,
+    ctx: Context = None
+) -> str:
+    """
+    Mark a backlog item as completed or won't do.
+
+    Args:
+        session_id: Your session ID
+        item_id: The backlog item ID
+        resolution: Optional notes about how it was resolved
+        wont_do: If True, marks as "wont_do" instead of "done"
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = datetime.now().isoformat()
+
+    # Search all collections for this item
+    collections = await chroma.list_collections()
+
+    for col in collections:
+        if not (col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX)):
+            continue
+
+        try:
+            result = await col.get(ids=[item_id], include=["metadatas", "documents"])
+            if result["ids"]:
+                meta = result["metadatas"][0]
+                doc = result["documents"][0]
+
+                new_status = "wont_do" if wont_do else "done"
+                meta["backlog_status"] = new_status
+                meta["completed_at"] = now
+                meta["completed_by"] = session_info["claude_instance"]
+                if resolution:
+                    meta["resolution"] = resolution
+                    doc += f"\n\n## Resolution\n{resolution}"
+
+                meta["updated"] = now
+
+                await col.update(
+                    ids=[item_id],
+                    documents=[doc],
+                    metadatas=[meta]
+                )
+
+                return json.dumps({
+                    "status": new_status,
+                    "id": item_id,
+                    "title": meta["title"],
+                    "completed_by": session_info["claude_instance"],
+                    "resolution": resolution
+                })
+        except Exception:
+            continue
+
+    return json.dumps({"error": f"Backlog item not found: {item_id}"})

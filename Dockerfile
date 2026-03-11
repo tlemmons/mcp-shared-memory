@@ -10,11 +10,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
+COPY src/ src/
 COPY server.py .
 
 # Default environment variables
 ENV CHROMA_HOST=localhost
 ENV CHROMA_PORT=8001
+ENV PYTHONPATH=/app/src
 
 EXPOSE 8080
 

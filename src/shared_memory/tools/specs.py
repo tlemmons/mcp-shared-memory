@@ -1,0 +1,366 @@
+"""Spec management tools - versioned specifications with owner enforcement."""
+
+import json
+from datetime import datetime
+from typing import Optional, List
+
+from mcp.server.fastmcp import Context
+
+from shared_memory.app import mcp
+from shared_memory.state import active_sessions
+from shared_memory.clients import get_chroma
+from shared_memory.helpers import (
+    get_project_collection, get_shared_collection,
+    require_session,
+)
+from shared_memory.config import MAX_CONTENT_SIZE, PROJECT_PREFIX
+
+
+@mcp.tool()
+async def memory_define_spec(
+    session_id: str,
+    name: str,
+    content: str,
+    owner: str = None,
+    version: str = None,
+    spec_type: str = "interface",
+    project: str = None,
+    json_schema: dict = None,
+    tags: List[str] = None,
+    ctx: Context = None
+) -> str:
+    """
+    Define or update a versioned spec with owner-only enforcement.
+
+    Use this for:
+    - Interface contracts between systems
+    - API specifications
+    - Data schemas
+    - Requirements documents
+
+    Owner Enforcement:
+    - First definition sets the owner
+    - Only the owner can update the spec
+    - Set owner to "human" or your name for human-controlled specs
+    - AIs can read but not modify human-owned specs
+
+    Versioning:
+    - Uses semver (e.g., "1.0.0", "1.2.3")
+    - Previous versions are preserved for history
+    - Omit version to auto-increment patch version
+
+    Args:
+        session_id: Your session ID
+        name: Unique spec name (e.g., "mqtt:frame-status", "api:user-auth")
+        content: The spec content (markdown, JSON, any text)
+        owner: Owner identifier (defaults to session's claude_instance)
+        version: Version string (semver). Omit to auto-increment
+        spec_type: Type of spec (interface, api, schema, requirement)
+        project: Project this belongs to (omit for shared specs)
+        json_schema: Optional JSON schema for validation
+        tags: Tags for categorization
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    # Check content size limit
+    if len(content.encode('utf-8')) > MAX_CONTENT_SIZE:
+        return json.dumps({
+            "error": f"Content exceeds maximum size of {MAX_CONTENT_SIZE // 1024}KB",
+            "size": f"{len(content.encode('utf-8')) // 1024}KB"
+        })
+
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = datetime.now().isoformat()
+
+    # Default owner to session's claude_instance
+    if not owner:
+        owner = session_info.get("claude_instance", "unknown")
+
+    # Normalize spec name for doc_id
+    spec_doc_id = f"spec_{name.replace(':', '_').replace('/', '_')}"
+
+    # Determine collection
+    if project:
+        collection = await get_project_collection(chroma, project)
+        location = f"project:{project}"
+    else:
+        collection = await get_shared_collection(chroma, "patterns")
+        location = "shared:patterns"
+
+    # Check if spec already exists
+    existing = None
+    try:
+        result = await collection.get(ids=[spec_doc_id], include=["documents", "metadatas"])
+        if result["ids"]:
+            existing = {
+                "content": result["documents"][0],
+                "metadata": result["metadatas"][0]
+            }
+    except Exception:
+        pass
+
+    # Version history collection (shared for all specs)
+    history_collection = await get_shared_collection(chroma, "context")
+
+    if existing:
+        # Check owner permission
+        existing_owner = existing["metadata"].get("spec_owner", "")
+        if existing_owner and existing_owner != owner:
+            return json.dumps({
+                "error": "Permission denied - spec owned by another entity",
+                "spec_name": name,
+                "owner": existing_owner,
+                "requester": owner,
+                "suggestion": "Only the owner can update this spec. Contact the owner to request changes."
+            })
+
+        # Auto-increment version if not provided
+        current_version = existing["metadata"].get("spec_version", "1.0.0")
+        if not version:
+            # Parse and increment patch version
+            parts = current_version.split(".")
+            if len(parts) == 3:
+                parts[2] = str(int(parts[2]) + 1)
+            version = ".".join(parts)
+
+        # Archive the previous version to history
+        history_id = f"spec_history_{name.replace(':', '_')}_{current_version.replace('.', '_')}"
+        history_metadata = {
+            "title": f"Spec History: {name} v{current_version}",
+            "type": "spec",
+            "spec_name": name,
+            "spec_version": current_version,
+            "spec_owner": existing_owner,
+            "archived_at": now,
+            "archived_by": owner,
+            "status": "archived"
+        }
+        try:
+            await history_collection.add(
+                ids=[history_id],
+                documents=[existing["content"]],
+                metadatas=[history_metadata]
+            )
+        except Exception:
+            pass  # History is best-effort
+
+        action = "updated"
+    else:
+        # New spec - default to version 1.0.0
+        if not version:
+            version = "1.0.0"
+        action = "created"
+
+    # Build metadata
+    tags = tags or []
+    metadata = {
+        "title": f"Spec: {name}",
+        "type": "spec",
+        "spec_name": name,
+        "spec_version": version,
+        "spec_type": spec_type,
+        "spec_owner": owner,
+        "status": "active",
+        "tags": json.dumps(tags),
+        "project": project or "",
+        "created": existing["metadata"].get("created", now) if existing else now,
+        "updated": now,
+        "created_by": existing["metadata"].get("created_by", owner) if existing else owner,
+        "updated_by": owner
+    }
+
+    if json_schema:
+        metadata["json_schema"] = json.dumps(json_schema)
+
+    # Upsert the spec
+    await collection.upsert(
+        ids=[spec_doc_id],
+        documents=[content],
+        metadatas=[metadata]
+    )
+
+    return json.dumps({
+        "status": action,
+        "spec_name": name,
+        "version": version,
+        "owner": owner,
+        "location": location,
+        "note": "Owner-only updates enforced. Previous versions preserved in history."
+    }, indent=2)
+
+
+@mcp.tool()
+async def memory_get_spec(
+    session_id: str,
+    name: str,
+    version: str = None,
+    project: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    Get a spec by name, optionally at a specific version.
+
+    Args:
+        session_id: Your session ID
+        name: Spec name (e.g., "mqtt:frame-status")
+        version: Optional specific version (omit for current)
+        project: Project to search (omit for shared specs)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    chroma = await get_chroma()
+
+    # Normalize spec name for doc_id
+    spec_doc_id = f"spec_{name.replace(':', '_').replace('/', '_')}"
+
+    # Determine collection
+    if project:
+        collection = await get_project_collection(chroma, project)
+    else:
+        collection = await get_shared_collection(chroma, "patterns")
+
+    if version:
+        # Get specific version from history
+        history_collection = await get_shared_collection(chroma, "context")
+        history_id = f"spec_history_{name.replace(':', '_')}_{version.replace('.', '_')}"
+
+        try:
+            result = await history_collection.get(
+                ids=[history_id],
+                include=["documents", "metadatas"]
+            )
+            if result["ids"]:
+                meta = result["metadatas"][0]
+                return json.dumps({
+                    "spec_name": name,
+                    "version": version,
+                    "owner": meta.get("spec_owner"),
+                    "content": result["documents"][0],
+                    "archived_at": meta.get("archived_at"),
+                    "note": "This is a historical version, not the current spec."
+                }, indent=2)
+        except Exception:
+            pass
+
+        return json.dumps({
+            "error": f"Version {version} not found for spec '{name}'",
+            "suggestion": "Use memory_list_specs to see available versions"
+        })
+
+    # Get current version
+    try:
+        result = await collection.get(
+            ids=[spec_doc_id],
+            include=["documents", "metadatas"]
+        )
+        if result["ids"]:
+            meta = result["metadatas"][0]
+            response = {
+                "spec_name": name,
+                "version": meta.get("spec_version"),
+                "owner": meta.get("spec_owner"),
+                "spec_type": meta.get("spec_type"),
+                "content": result["documents"][0],
+                "created": meta.get("created"),
+                "updated": meta.get("updated"),
+                "tags": json.loads(meta.get("tags", "[]"))
+            }
+            if meta.get("json_schema"):
+                response["json_schema"] = json.loads(meta["json_schema"])
+            return json.dumps(response, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Failed to retrieve spec: {str(e)}"})
+
+    return json.dumps({
+        "error": f"Spec '{name}' not found",
+        "suggestion": "Use memory_list_specs to see available specs"
+    })
+
+
+@mcp.tool()
+async def memory_list_specs(
+    session_id: str,
+    project: str = None,
+    include_versions: bool = False,
+    spec_type: str = None,
+    ctx: Context = None
+) -> str:
+    """
+    List all specs, optionally with version history.
+
+    Args:
+        session_id: Your session ID
+        project: Filter by project (omit for shared + all projects)
+        include_versions: Include previous version numbers
+        spec_type: Filter by spec type (interface, api, schema, requirement)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    chroma = await get_chroma()
+    specs = []
+
+    # Build where filter - use $and for compound conditions (ChromaDB requirement)
+    conditions = [{"type": {"$eq": "spec"}}, {"status": {"$eq": "active"}}]
+    if spec_type:
+        conditions.append({"spec_type": {"$eq": spec_type}})
+    where_filter = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+
+    # Search collections
+    collections_to_search = []
+    if project:
+        collections_to_search.append(await get_project_collection(chroma, project))
+    else:
+        # Search shared and all project collections
+        all_collections = await chroma.list_collections()
+        for col in all_collections:
+            if col.name.startswith(PROJECT_PREFIX) or col.name == "shared_patterns":
+                collections_to_search.append(col)
+
+    for collection in collections_to_search:
+        try:
+            # Get all docs and filter in Python (ChromaDB where filter unreliable)
+            all_docs = await collection.get(include=["metadatas"])
+            for doc_id, meta in zip(all_docs.get("ids", []), all_docs.get("metadatas", [])):
+                if meta and meta.get("type") == "spec" and meta.get("status") == "active":
+                    if spec_type and meta.get("spec_type") != spec_type:
+                        continue
+                    specs.append({
+                        "name": meta.get("spec_name"),
+                        "version": meta.get("spec_version"),
+                        "owner": meta.get("spec_owner"),
+                        "spec_type": meta.get("spec_type"),
+                        "project": meta.get("project") or "shared",
+                        "updated": meta.get("updated")
+                    })
+        except Exception:
+            continue
+
+    # Get version history if requested
+    if include_versions:
+        history_collection = await get_shared_collection(chroma, "context")
+        for spec in specs:
+            try:
+                # Query for history entries matching this spec
+                history_results = await history_collection.get(
+                    where={"spec_name": spec["name"], "status": "archived"},
+                    include=["metadatas"]
+                )
+                if history_results["ids"]:
+                    versions = [meta.get("spec_version") for meta in history_results["metadatas"]]
+                    versions.append(spec["version"])  # Add current
+                    spec["all_versions"] = sorted(set(versions), reverse=True)
+            except Exception:
+                spec["all_versions"] = [spec["version"]]
+
+    return json.dumps({
+        "specs": specs,
+        "count": len(specs),
+        "filter": {"project": project, "spec_type": spec_type}
+    }, indent=2)
