@@ -4,7 +4,6 @@ import json
 import re
 from datetime import datetime
 
-import pymssql
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
@@ -20,6 +19,7 @@ def _get_db_connection(db_name: str):
     config = DB_REGISTRY[db_name]
     if config["type"] == "mssql":
         try:
+            import pymssql
             conn = pymssql.connect(
                 server=config["host"],
                 port=config["port"],
