@@ -376,7 +376,13 @@ The `MONGO_PASSWORD` in `.env.example` defaults to `changeme`. The server will s
 
 ## CLAUDE.md Files
 
-You'll notice `CLAUDE.md` and `CLAUDE.md.template` in the repo root. These are instruction files for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic's CLI coding tool). They tell Claude Code how to interact with the shared memory server — session naming, startup checklist, etc. If you don't use Claude Code, you can safely ignore these files. The `.template` version is a starting point you can customize for your own projects.
+These are instruction files for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). If you don't use Claude Code, you can safely ignore them.
+
+- **`GLOBAL_CLAUDE.md.example`** — Copy to `~/.claude/CLAUDE.md` on every machine. This is the minimal bootstrap that tells Claude to start sessions and follow server-managed guidelines.
+- **`CLAUDE.md.template`** — Copy into each project directory and customize with your project name, agent names, and key files.
+- **`CLAUDE.md`** — This project's own Claude Code config (for developing the server itself).
+
+**Behavioral rules are managed server-side**, not in these files. Use `memory_guidelines(action="set", ...)` to add or update rules — every agent on every machine picks them up automatically at their next session start.
 
 ---
 

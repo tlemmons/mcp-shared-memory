@@ -30,14 +30,11 @@ Add more as needed:
 
 ---
 
-## Shared Memory (Auto-inherited from global CLAUDE.md)
+## Shared Memory
 
-For detailed usage guide:
-```
-memory_query(session_id="...", query="shared memory usage guide")
-```
+This project uses the MCP shared memory server for coordination.
+See the global CLAUDE.md (~/.claude/CLAUDE.md) for startup sequence.
 
-For project CLAUDE.md template:
-```
-memory_query(session_id="...", query="project CLAUDE.md template")
-```
+Behavioral rules are managed server-side — they arrive automatically
+in the `guidelines` field of every memory_start_session response.
+You MUST follow them. Do not ignore or skip guidelines.

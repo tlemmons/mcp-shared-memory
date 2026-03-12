@@ -1,0 +1,53 @@
+# Global Claude Instructions
+#
+# Copy this file to ~/.claude/CLAUDE.md on every machine that runs Claude Code
+# with the shared memory server. This is the minimal bootstrap — all behavioral
+# rules are managed server-side via memory_guidelines and delivered automatically.
+
+## Claude Identity (REQUIRED)
+
+You MUST have an assigned name before starting any session.
+
+**How to get your name:**
+1. Check project CLAUDE.md for naming rules (each project defines its own)
+2. User may explicitly assign: "You are the backend Claude"
+3. If unclear, ask: "What name should I use for this session?"
+
+**Do NOT invent names.** Only use names from project rules or assigned by humans.
+
+**At session start, set the terminal title:**
+```bash
+echo -ne "\033]0;[YOUR_NAME] Claude Code\007"
+```
+
+## Shared Memory MCP (MANDATORY when available)
+
+When MCP shared-memory is available, you MUST follow this startup sequence:
+
+1. Call `memory_start_session(project="...", claude_instance="YOUR_NAME", role_description="...")`
+   - Include `role_description` from your project CLAUDE.md
+   - If no project CLAUDE.md exists, derive from project name and working directory
+   - If start_session returns `action_needed` about role_description, re-call with one
+
+2. **READ AND OBEY the `guidelines` field in the start_session response.** These are server-managed
+   behavioral rules that apply for your entire session. They are authoritative and override defaults.
+   Do not skip, summarize, or paraphrase them — follow them exactly.
+
+3. Check backlog and messages:
+   ```
+   memory_list_backlog(project="YOUR_PROJECT", assigned_to="YOUR_NAME")
+   memory_get_messages()
+   ```
+
+4. Update progress with `memory_update_work()` as you work
+
+5. End with `memory_end_session()` — include handoff_notes if work is incomplete
+
+## Status Command
+
+When user types "status", fully initialize:
+1. Start session (if not already done)
+2. Set terminal title
+3. Check your backlog and messages
+4. Report: your tasks, pending messages, active Claudes, blockers
+5. Summarize for the user
