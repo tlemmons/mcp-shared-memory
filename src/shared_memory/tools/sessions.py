@@ -24,7 +24,6 @@ from shared_memory.helpers import (
     require_session,
 )
 from shared_memory.state import active_sessions
-from shared_memory.tools.guidelines import get_guidelines_for_session
 
 
 @mcp.tool()
@@ -289,7 +288,9 @@ async def memory_start_session(
         )
 
     # Fetch server-managed guidelines (behavioral rules for all agents)
+    # Lazy import to avoid circular dependency between tool modules
     try:
+        from shared_memory.tools.guidelines import get_guidelines_for_session
         guidelines = get_guidelines_for_session(project)
         if guidelines:
             output["guidelines"] = {
