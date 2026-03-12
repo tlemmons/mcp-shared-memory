@@ -127,7 +127,7 @@ No API keys or authentication tokens are required for local use (see [Security](
 
 ## Tool Reference
 
-38 tools organized into 12 categories.
+39 tools organized into 13 categories.
 
 ### Session Management (2)
 
@@ -216,6 +216,12 @@ No API keys or authentication tokens are required for local use (see [Security](
 | Tool | Description |
 |------|-------------|
 | `memory_db` | Read-only queries against registered external databases. Actions: `list`, `schema`, `query`. SQL injection protection built in. |
+
+### Server-Managed Guidelines (1)
+
+| Tool | Description |
+|------|-------------|
+| `memory_guidelines` | Manage behavioral rules that all agents receive at session start. Actions: `list`, `set`, `delete`, `get`. Update once, every agent on every machine picks it up. |
 
 ### Document Lifecycle (4)
 

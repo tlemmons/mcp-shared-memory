@@ -1,17 +1,15 @@
 """Tests for configuration module."""
 
-import os
 
 
 def test_config_imports():
     """Config module loads without error."""
     from shared_memory.config import (
-        CHROMA_HOST, CHROMA_PORT,
-        MONGO_HOST, MONGO_PORT,
-        MEMORY_TYPES, DOC_STATUSES,
-        BACKLOG_STATUSES, BACKLOG_PRIORITIES,
-        MESSAGE_PRIORITIES, MESSAGE_CATEGORIES,
-        SQL_BLOCKED_KEYWORDS,
+        BACKLOG_PRIORITIES,
+        CHROMA_HOST,
+        CHROMA_PORT,
+        DOC_STATUSES,
+        MEMORY_TYPES,
     )
     assert isinstance(CHROMA_HOST, str)
     assert isinstance(CHROMA_PORT, int)

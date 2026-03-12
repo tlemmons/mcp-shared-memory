@@ -10,6 +10,7 @@ from shared_memory.tools import (  # noqa: F401
     checklists,
     database,
     functions,
+    guidelines,
     lifecycle,
     locking,
     messaging,

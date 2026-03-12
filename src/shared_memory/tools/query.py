@@ -11,6 +11,8 @@ from shared_memory.clients import get_chroma
 from shared_memory.config import OVERLAP_WINDOW_HOURS, PROJECT_PREFIX, SHARED_PREFIX
 from shared_memory.helpers import (
     cleanup_stale_signals,
+    format_age,
+    format_staleness_warning,
     format_status_warning,
     get_project_collection,
     get_shared_collection,
@@ -112,6 +114,11 @@ async def memory_query(
                     status = meta.get("status", "active")
                     doc_id = proj_results["ids"][0][i] if proj_results["ids"] else None
 
+                    staleness = format_staleness_warning(meta)
+                    warning = format_status_warning(status, meta.get("superseded_by"))
+                    if staleness:
+                        warning = (warning + " " + staleness).strip() if warning else staleness
+
                     results.append({
                         "source": f"project:{project}",
                         "id": doc_id or meta.get("id", "unknown"),
@@ -119,9 +126,12 @@ async def memory_query(
                         "type": meta.get("type"),
                         "status": status,
                         "relevance": f"{relevance:.0%}",
+                        "created": meta.get("created", ""),
+                        "updated": meta.get("updated", ""),
+                        "age": format_age(meta.get("updated") or meta.get("created")),
                         "content": doc,
                         "access_count": meta.get("access_count", 0),
-                        "warning": format_status_warning(status, meta.get("superseded_by"))
+                        "warning": warning if warning else None
                     })
 
                     # Track access (fire-and-forget)
@@ -161,14 +171,20 @@ async def memory_query(
 
                         doc_id = shared_results["ids"][0][i] if shared_results["ids"] else None
 
+                        staleness = format_staleness_warning(meta)
+
                         results.append({
                             "source": f"shared:{shared_name}",
                             "id": doc_id,
                             "title": meta.get("title", "Untitled"),
                             "type": meta.get("type"),
                             "relevance": f"{relevance:.0%}",
+                            "created": meta.get("created", ""),
+                            "updated": meta.get("updated", ""),
+                            "age": format_age(meta.get("updated") or meta.get("created")),
                             "content": doc[:500] + "..." if len(doc) > 500 else doc,
-                            "access_count": meta.get("access_count", 0)
+                            "access_count": meta.get("access_count", 0),
+                            "warning": staleness if staleness else None
                         })
 
                         # Track access (fire-and-forget)

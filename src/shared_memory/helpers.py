@@ -161,6 +161,50 @@ def require_session(session_id: Optional[str]) -> str:
     return ""
 
 
+STALENESS_THRESHOLD_DAYS = 30
+
+
+def format_age(iso_timestamp: str) -> str:
+    """Convert ISO timestamp to human-readable age string."""
+    if not iso_timestamp:
+        return "unknown"
+    try:
+        created = datetime.fromisoformat(iso_timestamp)
+        delta = datetime.now() - created
+        if delta.days == 0:
+            hours = delta.seconds // 3600
+            if hours == 0:
+                return "just now"
+            return f"{hours}h ago"
+        elif delta.days == 1:
+            return "yesterday"
+        elif delta.days < 30:
+            return f"{delta.days}d ago"
+        elif delta.days < 365:
+            months = delta.days // 30
+            return f"{months}mo ago"
+        else:
+            years = delta.days // 365
+            return f"{years}y ago"
+    except (ValueError, TypeError):
+        return "unknown"
+
+
+def format_staleness_warning(meta: dict) -> str:
+    """Generate staleness warning for old documents."""
+    updated = meta.get("updated") or meta.get("created")
+    if not updated:
+        return ""
+    try:
+        updated_dt = datetime.fromisoformat(updated)
+        age_days = (datetime.now() - updated_dt).days
+        if age_days >= STALENESS_THRESHOLD_DAYS:
+            return f"This document is {format_age(updated)} old. Search for newer versions before relying on it."
+        return ""
+    except (ValueError, TypeError):
+        return ""
+
+
 def format_status_warning(status: str, superseded_by: str = None) -> str:
     """Generate warning for non-active documents."""
     if status == "active":

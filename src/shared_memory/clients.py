@@ -161,6 +161,11 @@ def get_mongo():
         reg_agents.create_index("project")
         reg_agents.create_index("tier")
 
+        # Ensure indexes for guidelines collection (server-managed agent instructions)
+        guidelines_col = _mongo_db.guidelines
+        guidelines_col.create_index("scope")
+        guidelines_col.create_index("name", unique=True)
+
         print(f"Connected to MongoDB at {MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}")
         return _mongo_db
 

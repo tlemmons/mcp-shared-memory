@@ -24,6 +24,7 @@ from shared_memory.helpers import (
     require_session,
 )
 from shared_memory.state import active_sessions
+from shared_memory.tools.guidelines import get_guidelines_for_session
 
 
 @mcp.tool()
@@ -286,6 +287,17 @@ async def memory_start_session(
             "memory_start_session again with role_description='brief description of your role and capabilities' "
             "or ask the user what your role should be."
         )
+
+    # Fetch server-managed guidelines (behavioral rules for all agents)
+    try:
+        guidelines = get_guidelines_for_session(project)
+        if guidelines:
+            output["guidelines"] = {
+                "instructions": "MANDATORY: Follow these rules for the entire session. They are authoritative.",
+                "rules": [g["rule"] for g in guidelines],
+            }
+    except Exception as e:
+        print(f"[MCP] Guidelines fetch failed (non-fatal): {e}")
 
     # Always include a tip pointing to the usage guide
     output["tip"] = "New? Run memory_query(query='shared memory usage guide') for best practices and backlog tools."

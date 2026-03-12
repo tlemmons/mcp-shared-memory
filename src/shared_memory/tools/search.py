@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from shared_memory.app import mcp
 from shared_memory.clients import get_chroma
 from shared_memory.config import PROJECT_PREFIX, SHARED_PREFIX
-from shared_memory.helpers import require_session
+from shared_memory.helpers import format_age, format_staleness_warning, require_session
 from shared_memory.state import active_sessions
 
 
@@ -63,12 +63,17 @@ async def memory_search_global(
                         results["metadatas"][0],
                         results["distances"][0]
                     ):
+                        staleness = format_staleness_warning(meta)
                         all_results.append({
                             "collection": col.name,
                             "title": meta.get("title", "Untitled"),
                             "type": meta.get("type"),
                             "relevance": 1 - dist,
-                            "content_preview": doc[:300] + "..." if len(doc) > 300 else doc
+                            "created": meta.get("created", ""),
+                            "updated": meta.get("updated", ""),
+                            "age": format_age(meta.get("updated") or meta.get("created")),
+                            "content_preview": doc[:300] + "..." if len(doc) > 300 else doc,
+                            "warning": staleness if staleness else None
                         })
             except Exception:
                 continue

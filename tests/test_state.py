@@ -3,7 +3,7 @@
 
 def test_state_dicts_exist():
     """Global state dictionaries are accessible and empty by default."""
-    from shared_memory.state import active_sessions, file_locks, active_signals
+    from shared_memory.state import active_sessions, active_signals, file_locks
 
     assert isinstance(active_sessions, dict)
     assert isinstance(file_locks, dict)
