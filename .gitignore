@@ -41,3 +41,12 @@ Thumbs.db
 
 # Docker
 *.log
+
+# Data files (MongoDB/ChromaDB dumps)
+*.bson
+*.dump
+chroma-data/
+mongo-data/
+
+# Temp scripts
+readmeInserts.md

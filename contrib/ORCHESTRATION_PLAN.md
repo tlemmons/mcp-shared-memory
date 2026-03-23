@@ -393,7 +393,7 @@ if task.likely_files intersects other_claude.files_touched_recently:
 ## File Structure
 
 ```
-/home/tlemmons/sharedUtils/mcp_RagArch/
+mcp-shared-memory/
 ├── server.py                 # MCP server (updated with messaging)
 ├── librarian.py             # Code analysis (existing)
 ├── orchestrator/
