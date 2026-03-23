@@ -120,6 +120,14 @@ async def memory_guidelines(
         )
 
         action_taken = "updated" if existing else "created"
+
+        try:
+            from shared_memory.audit import log_audit
+            log_audit(f"guideline.{action_taken}", "admin", normalized_scope,
+                      {"name": name, "priority": priority})
+        except Exception:
+            pass
+
         return json.dumps({"status": action_taken, "name": name, "scope": normalized_scope, "priority": priority})
 
     elif action == "delete":
@@ -127,6 +135,11 @@ async def memory_guidelines(
             return json.dumps({"error": "'name' is required for delete action"})
         result = db.guidelines.delete_one({"name": name})
         if result.deleted_count:
+            try:
+                from shared_memory.audit import log_audit
+                log_audit("guideline.deleted", "admin", "", {"name": name})
+            except Exception:
+                pass
             return json.dumps({"status": "deleted", "name": name})
         return json.dumps({"error": f"Guideline '{name}' not found"})
 

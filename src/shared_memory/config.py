@@ -131,3 +131,6 @@ MESSAGE_CATEGORIES = ["contract", "task", "question", "info", "review", "blocker
 
 # Message statuses for full lifecycle tracking
 MESSAGE_STATUSES = ["pending", "delivered", "received", "completed", "failed"]
+
+# Auth roles (ordered by privilege)
+AUTH_ROLES = ["readonly", "agent", "admin", "owner"]

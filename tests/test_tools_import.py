@@ -8,7 +8,7 @@ def test_all_39_tools_register():
     mcp = create_app()
     tools = mcp._tool_manager._tools
 
-    assert len(tools) == 39, f"Expected 39 tools, got {len(tools)}: {sorted(tools.keys())}"
+    assert len(tools) == 40, f"Expected 40 tools, got {len(tools)}: {sorted(tools.keys())}"
 
 
 def test_expected_tools_present():
@@ -27,6 +27,7 @@ def test_expected_tools_present():
         "memory_register_function", "memory_find_function",
         "memory_project", "memory_checklist", "memory_db",
         "memory_define_spec", "memory_list_agents", "memory_guidelines",
+        "memory_admin",
     }
 
     missing = expected - tools

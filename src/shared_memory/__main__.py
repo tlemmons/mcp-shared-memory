@@ -8,6 +8,7 @@ Usage:
 import argparse
 
 from shared_memory.app import create_app
+from shared_memory.auth import AUTH_ENABLED
 from shared_memory.clients import get_chroma
 from shared_memory.config import CHROMA_HOST, CHROMA_PORT
 from shared_memory.state import active_sessions, active_signals, file_locks
@@ -32,6 +33,8 @@ def main():
     else:
         transport_line = f"║  Endpoint: http://{args.host}:{args.port}/mcp (stateless HTTP)"
 
+    auth_line = f"║  Auth:     {'ENABLED (API key required)' if AUTH_ENABLED else 'disabled (open access)'}"
+
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║       Shared Memory MCP Server v1.0.0                        ║
@@ -39,6 +42,7 @@ def main():
 ╠══════════════════════════════════════════════════════════════╣
 {transport_line}
 ║  Chroma:   {CHROMA_HOST}:{CHROMA_PORT}
+{auth_line}
 ║                                                              ║
 ║  Session Management:                                         ║
 ║    memory_start_session   - START HERE (gets locks/signals)  ║

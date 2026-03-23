@@ -70,6 +70,15 @@ async def memory_store(
     if error:
         return error
 
+    # Auth check
+    try:
+        from shared_memory.auth import require_auth
+        auth_error = require_auth(active_sessions[session_id], "store", project)
+        if auth_error:
+            return json.dumps({"error": auth_error})
+    except ImportError:
+        pass
+
     if memory_type not in MEMORY_TYPES:
         return json.dumps({"error": f"Invalid memory_type. Must be one of: {MEMORY_TYPES}"}, indent=2)
 
@@ -219,6 +228,15 @@ async def memory_record_learning(
     error = require_session(session_id)
     if error:
         return error
+
+    # Auth check
+    try:
+        from shared_memory.auth import require_auth
+        auth_error = require_auth(active_sessions[session_id], "store", project)
+        if auth_error:
+            return json.dumps({"error": auth_error})
+    except ImportError:
+        pass
 
     tags = tags or []
     chroma = await get_chroma()

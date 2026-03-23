@@ -82,7 +82,8 @@ async def memory_add_backlog_item(
         "deferred_reason": deferred_reason or "",
         "created_by": session_info["claude_instance"],
         "created": now,
-        "updated": now
+        "updated": now,
+        "edit_count": 0
     }
 
     await collection.add(
@@ -112,6 +113,8 @@ async def memory_list_backlog(
     assigned_to: str = None,
     target_version: str = None,
     include_done: bool = False,
+    limit: int = 20,
+    offset: int = 0,
     ctx: Context = None
 ) -> str:
     """
@@ -125,6 +128,8 @@ async def memory_list_backlog(
         assigned_to: Filter by assignee
         target_version: Filter by milestone/version (e.g., "meural-beta", "v2.0", "sprint-5")
         include_done: Include completed items (default False)
+        limit: Maximum items to return (default 20, max 100). Use 0 for no limit.
+        offset: Skip this many items (for pagination, default 0)
     """
     error = require_session(session_id)
     if error:
@@ -192,6 +197,7 @@ async def memory_list_backlog(
                     "created_by": meta.get("created_by", "unknown"),
                     "created": meta.get("created"),
                     "updated": meta.get("updated"),
+                    "edit_count": meta.get("edit_count", 0),
                     "tags": json.loads(meta.get("tags", "[]"))
                 })
         except Exception:
@@ -204,10 +210,22 @@ async def memory_list_backlog(
     for item in items:
         del item["priority_order"]
 
-    return json.dumps({
-        "count": len(items),
-        "items": items
-    }, indent=2)
+    # Apply pagination
+    total = len(items)
+    effective_limit = min(limit, 100) if limit > 0 else total
+    paginated = items[offset:offset + effective_limit] if effective_limit else items[offset:]
+
+    result = {
+        "count": len(paginated),
+        "total": total,
+        "items": paginated,
+    }
+    if offset > 0:
+        result["offset"] = offset
+    if total > offset + len(paginated):
+        result["next_offset"] = offset + len(paginated)
+
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
@@ -221,6 +239,7 @@ async def memory_update_backlog_item(
     description: str = None,
     target_version: str = None,
     deferred_reason: str = None,
+    project: str = None,
     ctx: Context = None
 ) -> str:
     """
@@ -236,6 +255,7 @@ async def memory_update_backlog_item(
         description: New description
         target_version: Target version/release (e.g., "v6.1", "sprint-5")
         deferred_reason: Reason for deferring (when status is deferred)
+        project: Move item to a different project (deletes from current collection, adds to new one)
     """
     error = require_session(session_id)
     if error:
@@ -284,18 +304,31 @@ async def memory_update_backlog_item(
 
                 meta["updated"] = now
                 meta["updated_by"] = session_info["claude_instance"]
+                meta["edit_count"] = meta.get("edit_count", 0) + 1
 
-                await col.update(
-                    ids=[item_id],
-                    documents=[doc] if (title or description) else None,
-                    metadatas=[meta]
-                )
+                # Move to different project if requested
+                if project:
+                    meta["project"] = project
+                    new_collection = await get_project_collection(chroma, project)
+                    await new_collection.add(
+                        ids=[item_id],
+                        documents=[doc],
+                        metadatas=[meta]
+                    )
+                    await col.delete(ids=[item_id])
+                else:
+                    await col.update(
+                        ids=[item_id],
+                        documents=[doc] if (title or description) else None,
+                        metadatas=[meta]
+                    )
 
                 found = True
                 return json.dumps({
-                    "status": "updated",
+                    "status": "moved" if project else "updated",
                     "id": item_id,
                     "title": meta["title"],
+                    "project": project if project else meta.get("project", ""),
                     "backlog_status": meta.get("backlog_status"),
                     "priority": meta.get("priority"),
                     "assigned_to": meta.get("assigned_to") or None,

@@ -166,6 +166,17 @@ def get_mongo():
         guidelines_col.create_index("scope")
         guidelines_col.create_index("name", unique=True)
 
+        # Ensure indexes for audit_log collection
+        audit_col = _mongo_db.audit_log
+        audit_col.create_index("event_type")
+        audit_col.create_index("actor")
+        audit_col.create_index("timestamp", expireAfterSeconds=86400 * 90)  # 90-day retention
+
+        # Ensure indexes for api_keys collection (auth system)
+        api_keys_col = _mongo_db.api_keys
+        api_keys_col.create_index("key_hash", unique=True)
+        api_keys_col.create_index("name", unique=True)
+
         print(f"Connected to MongoDB at {MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}")
         return _mongo_db
 

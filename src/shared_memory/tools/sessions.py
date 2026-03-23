@@ -35,6 +35,7 @@ async def memory_start_session(
     role_description: str = None,
     working_directory: str = None,
     spawned_by: str = None,
+    api_key: str = None,
     ctx: Context = None
 ) -> str:
     """
@@ -62,9 +63,50 @@ async def memory_start_session(
         working_directory: Your working directory path. Used to auto-identify your agent name
             if path patterns are registered for this project.
         spawned_by: Parent agent that spawned this worker (for worker tier agents).
+        api_key: API key for authentication (required when MCP_AUTH_ENABLED=true).
     """
     # Cleanup stale sessions on each new session start
     cleanup_stale_sessions()
+
+    # ── Authentication ──
+    _auth_role = "agent"  # default when auth disabled
+    _auth_projects = []   # empty = all projects
+    try:
+        from shared_memory.auth import AUTH_ENABLED, check_project_access, validate_api_key
+        if AUTH_ENABLED:
+            if not api_key:
+                return json.dumps({
+                    "error": "Authentication required. Provide api_key parameter.",
+                    "auth_enabled": True,
+                    "hint": "Set api_key in your MCP client config or pass it to memory_start_session."
+                })
+            key_info = validate_api_key(api_key)
+            if not key_info:
+                try:
+                    from shared_memory.audit import log_audit
+                    log_audit("auth.failed", claude_instance, project,
+                              {"reason": "invalid_key"})
+                except Exception:
+                    pass
+                return json.dumps({"error": "Invalid or revoked API key."})
+
+            _auth_role = key_info["role"]
+            _auth_projects = key_info.get("projects", [])
+
+            # Tenant isolation: check project access
+            if not check_project_access(_auth_projects, project):
+                try:
+                    from shared_memory.audit import log_audit
+                    log_audit("auth.project_denied", claude_instance, project,
+                              {"key_name": key_info["name"], "allowed": _auth_projects})
+                except Exception:
+                    pass
+                return json.dumps({
+                    "error": f"Access denied: your API key does not have access to project '{project}'.",
+                    "allowed_projects": _auth_projects,
+                })
+    except ImportError:
+        pass  # auth module not available, continue without auth
 
     # Normalize project name
     normalized_project = project.lower().replace("-", "_").replace(" ", "_")
@@ -179,7 +221,9 @@ async def memory_start_session(
         "blocked_by": None,
         "blocked_reason": None,
         "waiting_for_signal": None,
-        "tmux_target": tmux_target
+        "tmux_target": tmux_target,
+        "role": _auth_role,
+        "allowed_projects": _auth_projects,
     }
 
     # Gather context for this Claude - keep output compact
@@ -299,6 +343,26 @@ async def memory_start_session(
             }
     except Exception as e:
         print(f"[MCP] Guidelines fetch failed (non-fatal): {e}")
+
+    # Auth info in output (when auth is enabled)
+    try:
+        from shared_memory.auth import AUTH_ENABLED as _ae
+        if _ae:
+            output["auth"] = {
+                "role": _auth_role,
+                "projects": _auth_projects or "all",
+            }
+    except ImportError:
+        pass
+
+    # Audit log
+    try:
+        from shared_memory.audit import log_audit
+        log_audit("session.start", claude_instance, project,
+                  {"task": task_description, "worker": _is_worker, "role": _auth_role},
+                  session_id)
+    except Exception:
+        pass
 
     # Always include a tip pointing to the usage guide
     output["tip"] = "New? Run memory_query(query='shared memory usage guide') for best practices and backlog tools."

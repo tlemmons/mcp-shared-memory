@@ -28,6 +28,7 @@ async def memory_define_spec(
     project: str = None,
     json_schema: dict = None,
     tags: List[str] = None,
+    force: bool = False,
     ctx: Context = None
 ) -> str:
     """
@@ -60,6 +61,7 @@ async def memory_define_spec(
         project: Project this belongs to (omit for shared specs)
         json_schema: Optional JSON schema for validation
         tags: Tags for categorization
+        force: Override safety checks (e.g., state spec overwrite protection). Default False.
     """
     error = require_session(session_id)
     if error:
@@ -117,6 +119,28 @@ async def memory_define_spec(
                 "requester": owner,
                 "suggestion": "Only the owner can update this spec. Contact the owner to request changes."
             })
+
+        # State spec overwrite protection: reject if new content is much shorter
+        # This prevents tangent sessions from accidentally erasing prior context
+        if name.startswith("state:") and not force:
+            existing_len = len(existing["content"])
+            new_len = len(content)
+            # If new content is less than half the length, block it
+            if existing_len > 200 and new_len < existing_len * 0.5:
+                return json.dumps({
+                    "error": "State spec overwrite protection triggered",
+                    "spec_name": name,
+                    "existing_size": existing_len,
+                    "new_size": new_len,
+                    "reduction": f"{((existing_len - new_len) / existing_len) * 100:.0f}%",
+                    "suggestion": (
+                        "Your new state spec is significantly shorter than the existing one. "
+                        "This usually means a tangent session is about to erase the prior session's context. "
+                        "READ the existing spec with memory_get_spec(name='" + name + "') first, "
+                        "then merge your updates with the existing Next Steps. "
+                        "Set force=True to override this check if you intentionally want to replace it."
+                    )
+                })
 
         # Auto-increment version if not provided
         current_version = existing["metadata"].get("spec_version", "1.0.0")
@@ -182,6 +206,14 @@ async def memory_define_spec(
         documents=[content],
         metadatas=[metadata]
     )
+
+    # Audit log for spec changes
+    try:
+        from shared_memory.audit import log_audit
+        log_audit(f"spec.{action}", owner, project or "",
+                  {"spec_name": name, "version": version}, session_id)
+    except Exception:
+        pass
 
     return json.dumps({
         "status": action,

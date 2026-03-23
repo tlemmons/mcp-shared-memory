@@ -8,6 +8,16 @@
 
 **A shared memory and coordination server for multiple AI coding agents, built on the Model Context Protocol (MCP).**
 
+When you run multiple AI agents on the same codebase, three things break fast:
+
+1. **They forget everything between sessions.** Agent parks, knowledge dies. The next agent re-reads the same code, re-discovers the same bugs, re-learns the same gotchas.
+2. **They step on each other.** Two agents modify the same file. Nobody knows what anyone else is doing or has locked.
+3. **They get dumber as sessions get long.** Research calls this "context rot" — model performance degrades as the context window fills up, even well below capacity. Longer sessions don't mean better work.
+
+This server fixes all three. It gives your agents a shared brain that persists across sessions, coordinates work across agents, and lets them record what they learn so the next agent starts where the last one left off.
+
+**Battle-tested.** This has been running in production coordinating 6 specialized agents across 500+ sessions on a commercial IoT platform — C#/.NET server, Python on Raspberry Pi, .NET MAUI mobile, MQTT, Redis, the works. The problems it solves were discovered the hard way.
+
 ---
 
 ## What It Does
@@ -16,6 +26,46 @@
 - **Multi-agent coordination** -- File locking, inter-agent messaging, heartbeat monitoring, and overlap detection so multiple AI agents can work on the same codebase without stepping on each other.
 - **Task and backlog management** -- Track work items, assign tasks to agents, manage checklists, and hand off context between sessions.
 - **Function registry with auto-enrichment** -- Register functions once, and a librarian daemon analyzes the source code to add signatures, gotchas, and semantic search summaries.
+
+---
+
+## How It Compares
+
+There are 370+ MCP memory servers listed on PulseMCP. Most give a single agent persistent memory. This server is built for **teams of agents** working together on the same project over weeks and months.
+
+| Capability | Typical MCP Memory Server | This Server |
+|---|---|---|
+| Persistent storage | Yes | Yes — MongoDB + ChromaDB vector search |
+| Multi-agent session tracking | No | Yes — Agent registry, heartbeat, overlap detection |
+| Cross-agent messaging | No | Yes — Send/receive messages with threading and status tracking |
+| Function registry | No | Yes — Register once, librarian daemon auto-enriches with code analysis |
+| Task backlog | No | Yes — Create tasks, assign to agents, track status and priority |
+| Versioned specs & contracts | No | Yes — Owner enforcement, semver history |
+| File locking | No | Yes — Atomic locks with stale detection, auto-release on session end |
+| Behavioral guidelines | No | Yes — Set rules once, every agent on every machine receives them |
+| Staleness management | No | Yes — Age warnings, supersede, archive, bulk cleanup by tag |
+| Librarian mode | No | Yes — Agents analyze source code and enrich the knowledge base |
+| External database access | No | Yes — Read-only SQL queries (MSSQL) against your project databases |
+| Checklists | No | Yes — Shared launch readiness, deploy steps, etc. |
+
+40 tools across 14 categories. Not a toy — a coordination system.
+
+---
+
+## Works for Solo Agents Too
+
+You don't need multiple agents to benefit from this server. A single Claude Code or Cursor instance gets:
+
+- **Persistent memory across sessions** — your agent remembers what it learned yesterday
+- **Function registry** — the agent doesn't re-read code it already analyzed
+- **Learnings** — gotchas, workarounds, and non-obvious behaviors survive session restarts
+- **Librarian enrichment** — your codebase gets indexed and searchable over time
+- **Backlog** — track what's done and what's next between sessions
+- **State specs** — resume exactly where you left off
+
+The coordination features (messaging, file locks, multi-agent awareness) just sit there unused. They don't hurt anything — they're tools your agent doesn't call until you scale up.
+
+**Start with one agent. The multi-agent features are there when you're ready — they don't get in the way until you need them.**
 
 ---
 
@@ -52,6 +102,36 @@ Verify it is running:
 ```bash
 curl http://localhost:8080/health
 ```
+
+### Your First Session
+
+Once connected, your agent's first interaction looks like this:
+
+```
+Agent: memory_start_session(project="my-app", claude_instance="main")
+→ Returns: session ID, any prior learnings, active work, handoff notes
+
+Agent: memory_record_learning(
+    session_id="...",
+    topic="postgres connection pooling",
+    content="PgBouncer silently drops connections after 5 min idle.
+             Must set keepalive_idle=60 in connection string or
+             requests fail with 'server closed the connection unexpectedly'."
+)
+→ Stored. Next session, memory_start_session returns this automatically.
+
+Agent: memory_register_function(
+    session_id="...",
+    name="retry_with_backoff",
+    file_path="src/utils/resilience.py:42",
+    purpose="Retry async calls with exponential backoff and jitter",
+    gotchas="Max 5 retries. Raises RetryExhausted, not the original exception."
+)
+→ Registered. Any future agent asking "how do we handle retries?"
+  finds this via memory_find_function.
+```
+
+Three calls. Your agent now has persistent memory, and every future session starts with context instead of a blank slate.
 
 ---
 
@@ -127,7 +207,7 @@ No API keys or authentication tokens are required for local use (see [Security](
 
 ## Tool Reference
 
-39 tools organized into 13 categories.
+40 tools organized into 14 categories.
 
 ### Session Management (2)
 
@@ -223,6 +303,12 @@ No API keys or authentication tokens are required for local use (see [Security](
 |------|-------------|
 | `memory_guidelines` | Manage behavioral rules that all agents receive at session start. Actions: `list`, `set`, `delete`, `get`. Update once, every agent on every machine picks it up. |
 
+### Admin (1 CRUD tool)
+
+| Tool | Description |
+|------|-------------|
+| `memory_admin` | Manage API keys and view audit logs. Actions: `create_key`, `revoke_key`, `list_keys`, `audit_log`, `auth_status`. Requires owner role when auth is enabled. |
+
 ### Document Lifecycle (4)
 
 | Tool | Description |
@@ -254,6 +340,7 @@ All configuration is via environment variables. See `.env.example` for the compl
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MCP_AUTH_ENABLED` | `false` | Enable API key authentication. When true, `memory_start_session` requires a valid `api_key`. |
 | `ANTHROPIC_API_KEY` | -- | Required only for the standalone librarian enrichment service. |
 | `LIBRARIAN_PROJECT_ROOTS` | -- | JSON map of project names to filesystem paths for librarian code analysis. |
 | `DB_<NAME>_TYPE` | -- | Register an external database. Supported: `mssql`. See `.env.example` for full pattern. |
@@ -282,6 +369,8 @@ mcp-shared-memory/
 │       ├── clients.py            # MongoDB and ChromaDB client setup
 │       ├── state.py              # In-memory state (sessions, locks, signals)
 │       ├── helpers.py            # Shared utility functions
+│       ├── auth.py               # API key auth, RBAC, tenant isolation
+│       ├── audit.py              # Audit logging to MongoDB
 │       └── tools/
 │           ├── __init__.py       # Tool registration
 │           ├── sessions.py       # Session start/end
@@ -296,7 +385,8 @@ mcp-shared-memory/
 │           ├── projects.py       # Project and agent registry
 │           ├── checklists.py     # Shared checklists
 │           ├── database.py       # External database queries
-│           └── lifecycle.py      # Document lifecycle and work status
+│           ├── lifecycle.py      # Document lifecycle and work status
+│           └── admin.py          # API key management and audit logs
 ├── librarian.py                  # Standalone enrichment daemon (uses Haiku)
 ├── docker-compose.yml            # Full stack: server + MongoDB + ChromaDB
 ├── Dockerfile
@@ -362,7 +452,24 @@ docker compose logs -f mcp-server
 
 ## Security
 
-This server is designed for **local or trusted-network use**. It has no built-in authentication.
+This server is designed for **local or trusted-network use**. Authentication is optional but available.
+
+### Built-in API Key Authentication
+
+Set `MCP_AUTH_ENABLED=true` in `.env` to require API keys for all sessions. Keys are managed via the `memory_admin` tool with role-based access control:
+
+| Role | Access |
+|------|--------|
+| `owner` | Full access — manage API keys, guidelines, all projects |
+| `admin` | Manage backlog, specs, functions, messaging across all projects |
+| `agent` | Standard agent access, scoped to assigned projects |
+| `readonly` | Query and search only, no writes |
+
+Each API key can be scoped to specific projects for **tenant isolation** — agents only see data in their allowed projects. All security-sensitive operations are written to an **audit log** (90-day retention).
+
+When auth is disabled (default), all tools are open — suitable for local single-user setups.
+
+### Network Security
 
 **If you need remote access**, do not expose port 8080 directly. Instead:
 
@@ -386,17 +493,50 @@ These are instruction files for [Claude Code](https://docs.anthropic.com/en/docs
 
 ---
 
+## The Agent Discipline Problem
+
+Having a shared memory server isn't enough. **Agents need to actually use it consistently.**
+
+Agents drift. They forget to call `memory_record_learning`. They dump everything into one giant state spec instead of topic-scoped memories. They write to local files that other agents can't see. They run marathon sessions until context rot makes them forget their own instructions.
+
+This server includes tools to fight that drift:
+
+### Server-managed guidelines
+
+Set rules once via `memory_guidelines`, every agent receives them at session start. Rules like "never write to local files," "record learnings immediately," "park after 1-3 tasks." Update once — every agent on every machine picks it up on their next `memory_start_session`.
+
+### Staleness management
+
+Every `memory_query` result includes age warnings. Agents are instructed to supersede outdated information as they encounter it — distributed cleanup during normal work, not a separate chore. Bulk archive completed features with `memory_archive_by_tag`.
+
+See [docs/WORKED_EXAMPLE.md](docs/WORKED_EXAMPLE.md) for a walkthrough of two agents coordinating on a real task.
+
+---
+
 ## Roadmap
 
 Contributions welcome! These are known gaps that would benefit the project:
 
-- **Authentication and tenant isolation** — API key per project, namespace separation for multi-user deployments
+- ~~**Authentication and tenant isolation**~~ — Done! API keys with RBAC and project scoping. See [Security](#security).
 - **PostgreSQL and MySQL support** — the `memory_db` tool currently supports MSSQL only
 - **Local model support for librarian** — Ollama integration so the enrichment daemon doesn't require a cloud API key
 - **TTL and stale data cleanup** — background pruning of expired sessions, locks, and messages with configurable retention
 - **Data export/backup tooling** — dump and restore scripts for migration and disaster recovery
 
 See [docs/WORKED_EXAMPLE.md](docs/WORKED_EXAMPLE.md) for an end-to-end walkthrough of multi-agent coordination.
+
+---
+
+## Hosted Version
+
+Don't want to run your own server? A hosted version is available — you get a dedicated instance with MongoDB and ChromaDB, just point your agents at the URL and go.
+
+- No server setup — connect your agents in minutes
+- Automatic backups
+- Same 40 tools, same features
+- Multi-project isolation
+
+**Interested?** Open an issue or reach out for details.
 
 ---
 
@@ -410,4 +550,10 @@ Copyright (c) 2024-2026 Thomas Lemmons.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue to discuss significant changes before submitting a pull request. The project uses standard Python tooling -- no special build system or test framework is required beyond the dependencies in `requirements.txt`.
+Contributions welcome. Please open an issue to discuss significant changes before submitting a pull request. The project uses standard Python tooling — no special build system or test framework required beyond the dependencies in `requirements.txt`.
+
+If you're running multi-agent setups and have coordination patterns that work, I'd love to hear about them.
+
+---
+
+**If this project saves you time, consider [sponsoring](https://github.com/sponsors/tlemmons) the development.**
