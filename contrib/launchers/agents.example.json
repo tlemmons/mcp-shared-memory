@@ -1,0 +1,23 @@
+{
+  "project": "my-project",
+  "agents": {
+    "coordinator": {
+      "path": "C:\\code\\my-project",
+      "color": "Blue",
+      "label": "COORD",
+      "role": "Project coordination, task triage, cross-team dependencies"
+    },
+    "backend": {
+      "path": "C:\\code\\my-project\\server",
+      "color": "Green",
+      "label": "BE",
+      "role": "REST APIs, database, business logic"
+    },
+    "frontend": {
+      "path": "C:\\code\\my-project\\web",
+      "color": "Yellow",
+      "label": "FE",
+      "role": "React UI, state management, API integration"
+    }
+  }
+}
