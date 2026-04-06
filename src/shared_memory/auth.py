@@ -17,8 +17,9 @@ Tenant isolation:
 import hashlib
 import os
 import secrets
-from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+
+from shared_memory.helpers import utc_now
 
 # Whether auth is required (opt-in)
 AUTH_ENABLED = os.getenv("MCP_AUTH_ENABLED", "").lower() in ("true", "1", "yes")
@@ -74,7 +75,7 @@ def validate_api_key(api_key: str) -> Optional[Dict]:
     # Update last_used
     db.api_keys.update_one(
         {"key_hash": key_hash},
-        {"$set": {"last_used": datetime.now()}}
+        {"$set": {"last_used": utc_now()}}
     )
 
     return {
@@ -106,7 +107,7 @@ def create_api_key(
 
     raw_key = generate_api_key()
     key_hash = _hash_key(raw_key)
-    now = datetime.now()
+    now = utc_now()
 
     record = {
         "key_hash": key_hash,
@@ -141,7 +142,7 @@ def revoke_api_key(name: str) -> bool:
 
     result = db.api_keys.update_one(
         {"name": name, "active": True},
-        {"$set": {"active": False, "revoked_at": datetime.now()}}
+        {"$set": {"active": False, "revoked_at": utc_now()}}
     )
     return result.modified_count > 0
 

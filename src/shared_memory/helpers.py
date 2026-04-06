@@ -5,7 +5,7 @@
 import fnmatch
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from shared_memory.config import (
@@ -20,6 +20,34 @@ from shared_memory.config import (
 from shared_memory.state import active_sessions, active_signals, file_locks
 
 MIN_RELEVANCE_THRESHOLD = 0.3  # 30% minimum relevance
+
+
+def utc_now() -> datetime:
+    """Return the current time as a UTC-aware datetime."""
+    return datetime.now(timezone.utc)
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC time as an ISO8601 string with explicit offset."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_timestamp(value) -> Optional[datetime]:
+    """Parse an ISO timestamp into a UTC-aware datetime.
+
+    Tolerates both naive (legacy) and aware ISO strings. Naive timestamps
+    are assumed to be UTC since the server container has always run UTC.
+    Returns None on failure.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def calculate_relevance(distance: float) -> float:
@@ -39,7 +67,7 @@ async def get_project_collection(client, project: str):
     name = f"{PROJECT_PREFIX}{project.lower().replace('-', '_')}"
     return await client.get_or_create_collection(
         name=name,
-        metadata={"project": project, "created": datetime.now().isoformat()}
+        metadata={"project": project, "created": utc_now_iso()}
     )
 
 
@@ -50,7 +78,7 @@ async def get_shared_collection(client, collection_type: str):
 
 def generate_doc_id(content: str, doc_type: str) -> str:
     """Generate a stable document ID from content hash."""
-    hash_input = f"{doc_type}:{content[:500]}:{datetime.now().isoformat()}"
+    hash_input = f"{doc_type}:{content[:500]}:{utc_now_iso()}"
     return hashlib.sha256(hash_input.encode()).hexdigest()[:16]
 
 
@@ -120,7 +148,7 @@ def calculate_expiry(memory_type: str, custom_days: int = None) -> Optional[str]
     if days is None:
         return None
 
-    return (datetime.now() + timedelta(days=days)).isoformat()
+    return (utc_now() + timedelta(days=days)).isoformat()
 
 
 def is_expired(meta: Dict) -> bool:
@@ -128,10 +156,10 @@ def is_expired(meta: Dict) -> bool:
     expires_at = meta.get("expires_at")
     if not expires_at:
         return False
-    try:
-        return datetime.fromisoformat(expires_at) < datetime.now()
-    except Exception:
+    parsed = parse_timestamp(expires_at)
+    if parsed is None:
         return False
+    return parsed < utc_now()
 
 
 async def update_access_stats(collection, doc_id: str):
@@ -141,7 +169,7 @@ async def update_access_stats(collection, doc_id: str):
         if result["ids"]:
             meta = result["metadatas"][0]
             meta["access_count"] = meta.get("access_count", 0) + 1
-            meta["last_accessed"] = datetime.now().isoformat()
+            meta["last_accessed"] = utc_now_iso()
             await collection.update(ids=[doc_id], metadatas=[meta])
     except Exception:
         pass  # Non-critical, don't fail the query
@@ -166,28 +194,25 @@ STALENESS_THRESHOLD_DAYS = 30
 
 def format_age(iso_timestamp: str) -> str:
     """Convert ISO timestamp to human-readable age string."""
-    if not iso_timestamp:
+    created = parse_timestamp(iso_timestamp)
+    if created is None:
         return "unknown"
-    try:
-        created = datetime.fromisoformat(iso_timestamp)
-        delta = datetime.now() - created
-        if delta.days == 0:
-            hours = delta.seconds // 3600
-            if hours == 0:
-                return "just now"
-            return f"{hours}h ago"
-        elif delta.days == 1:
-            return "yesterday"
-        elif delta.days < 30:
-            return f"{delta.days}d ago"
-        elif delta.days < 365:
-            months = delta.days // 30
-            return f"{months}mo ago"
-        else:
-            years = delta.days // 365
-            return f"{years}y ago"
-    except (ValueError, TypeError):
-        return "unknown"
+    delta = utc_now() - created
+    if delta.days == 0:
+        hours = delta.seconds // 3600
+        if hours == 0:
+            return "just now"
+        return f"{hours}h ago"
+    elif delta.days == 1:
+        return "yesterday"
+    elif delta.days < 30:
+        return f"{delta.days}d ago"
+    elif delta.days < 365:
+        months = delta.days // 30
+        return f"{months}mo ago"
+    else:
+        years = delta.days // 365
+        return f"{years}y ago"
 
 
 def format_staleness_warning(meta: dict) -> str:
@@ -195,14 +220,13 @@ def format_staleness_warning(meta: dict) -> str:
     updated = meta.get("updated") or meta.get("created")
     if not updated:
         return ""
-    try:
-        updated_dt = datetime.fromisoformat(updated)
-        age_days = (datetime.now() - updated_dt).days
-        if age_days >= STALENESS_THRESHOLD_DAYS:
-            return f"This document is {format_age(updated)} old. Search for newer versions before relying on it."
+    parsed = parse_timestamp(updated)
+    if parsed is None:
         return ""
-    except (ValueError, TypeError):
-        return ""
+    age_days = (utc_now() - parsed).days
+    if age_days >= STALENESS_THRESHOLD_DAYS:
+        return f"This document is {format_age(updated)} old. Search for newer versions before relying on it."
+    return ""
 
 
 def format_status_warning(status: str, superseded_by: str = None) -> str:
@@ -226,7 +250,7 @@ async def check_overlap(client, project: str, files_touched: List[str], current_
     overlaps = []
     work_collection = await get_shared_collection(client, "work")
 
-    cutoff = (datetime.now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
+    cutoff = (utc_now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
 
     for file_path in files_touched:
         try:
@@ -303,12 +327,11 @@ def is_lock_stale(lock_info: Dict) -> bool:
     if not last_activity:
         return False
 
-    try:
-        last_time = datetime.fromisoformat(last_activity)
-        stale_threshold = datetime.now() - timedelta(minutes=STALE_LOCK_MINUTES)
-        return last_time < stale_threshold
-    except Exception:
+    last_time = parse_timestamp(last_activity)
+    if last_time is None:
         return False
+    stale_threshold = utc_now() - timedelta(minutes=STALE_LOCK_MINUTES)
+    return last_time < stale_threshold
 
 
 def normalize_path(path: str) -> str:
@@ -355,15 +378,12 @@ def release_session_locks(session_id: str) -> List[str]:
 
 def cleanup_stale_sessions():
     """Remove sessions with no activity for SESSION_TTL_DAYS."""
-    cutoff = datetime.now() - timedelta(days=SESSION_TTL_DAYS)
+    cutoff = utc_now() - timedelta(days=SESSION_TTL_DAYS)
     to_remove = []
     for sid, info in active_sessions.items():
-        try:
-            last_activity = datetime.fromisoformat(info.get("last_activity", ""))
-            if last_activity < cutoff:
-                to_remove.append(sid)
-        except Exception:
-            pass
+        last_activity = parse_timestamp(info.get("last_activity", ""))
+        if last_activity and last_activity < cutoff:
+            to_remove.append(sid)
     for sid in to_remove:
         # Release any locks held by this session
         release_session_locks(sid)
@@ -375,15 +395,12 @@ def cleanup_stale_sessions():
 
 def cleanup_stale_signals():
     """Remove signals older than SIGNAL_RETENTION_HOURS."""
-    cutoff = datetime.now() - timedelta(hours=SIGNAL_RETENTION_HOURS)
+    cutoff = utc_now() - timedelta(hours=SIGNAL_RETENTION_HOURS)
     to_remove = []
     for signal_name, info in active_signals.items():
-        try:
-            signal_time = datetime.fromisoformat(info.get("timestamp", ""))
-            if signal_time < cutoff:
-                to_remove.append(signal_name)
-        except Exception:
-            pass
+        signal_time = parse_timestamp(info.get("timestamp", ""))
+        if signal_time and signal_time < cutoff:
+            to_remove.append(signal_name)
     for s in to_remove:
         del active_signals[s]
 
@@ -408,7 +425,7 @@ def get_relevant_locks_for_session(session_id: str, project: str) -> List[Dict]:
 async def get_recent_modifications(client, project: str, session_id: str) -> List[Dict]:
     """Get files modified recently by other sessions."""
     modifications = []
-    cutoff = (datetime.now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
+    cutoff = (utc_now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
 
     try:
         work_collection = await get_shared_collection(client, "work")
@@ -500,7 +517,7 @@ async def get_interface_updates(client, project: str, last_session_end: str = No
             include=["metadatas"]
         )
 
-        cutoff = last_session_end or (datetime.now() - timedelta(hours=24)).isoformat()
+        cutoff = last_session_end or (utc_now() - timedelta(hours=24)).isoformat()
 
         if results["metadatas"]:
             for meta in results["metadatas"]:

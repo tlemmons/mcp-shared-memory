@@ -1,6 +1,6 @@
 """Tests for helper functions."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def test_generate_doc_id():
@@ -40,7 +40,7 @@ def test_calculate_expiry():
     assert isinstance(expiry, str)
     # Should be a valid ISO date in the future
     expiry_dt = datetime.fromisoformat(expiry)
-    assert expiry_dt > datetime.now()
+    assert expiry_dt > datetime.now(timezone.utc)
 
     # Architecture type never expires
     expiry = calculate_expiry("architecture")
@@ -50,7 +50,7 @@ def test_calculate_expiry():
     expiry = calculate_expiry("anything", custom_days=7)
     assert expiry is not None
     expiry_dt = datetime.fromisoformat(expiry)
-    assert expiry_dt > datetime.now()
+    assert expiry_dt > datetime.now(timezone.utc)
 
     # Explicit no-expiry
     expiry = calculate_expiry("anything", custom_days=0)

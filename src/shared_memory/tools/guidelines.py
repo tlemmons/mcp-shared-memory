@@ -1,12 +1,12 @@
 """Guidelines tools - server-managed behavioral rules for agents."""
 
 import json
-from datetime import datetime
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
 from shared_memory.clients import get_mongo
+from shared_memory.helpers import utc_now_iso
 
 
 def get_guidelines_for_session(project: str = None) -> list:
@@ -103,7 +103,7 @@ async def memory_guidelines(
         if not name or not rule:
             return json.dumps({"error": "Both 'name' and 'rule' are required for set action"})
 
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         existing = db.guidelines.find_one({"name": name})
 
         db.guidelines.update_one(

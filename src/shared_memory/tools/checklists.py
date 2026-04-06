@@ -1,14 +1,13 @@
 """Checklist tools - shared checklists for coordination."""
 
 import json
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
 from shared_memory.clients import get_mongo
-from shared_memory.helpers import require_session
+from shared_memory.helpers import require_session, utc_now
 from shared_memory.state import active_sessions
 
 
@@ -84,7 +83,7 @@ async def memory_checklist(
         if existing:
             return json.dumps({"error": f"Checklist '{name}' already exists in {target_project}. Use action='add' to append items."})
 
-        now = datetime.now()
+        now = utc_now()
         checklist_items = []
         for text in items:
             checklist_items.append({
@@ -167,7 +166,7 @@ async def memory_checklist(
             {"_id": doc_id},
             {
                 "$push": {"items": {"$each": new_items}},
-                "$set": {"updated_at": datetime.now()}
+                "$set": {"updated_at": utc_now()}
             }
         )
 
@@ -193,8 +192,8 @@ async def memory_checklist(
         update_fields = {
             f"items.{item_index}.done": done,
             f"items.{item_index}.checked_by": who if done else None,
-            f"items.{item_index}.checked_at": datetime.now() if done else None,
-            "updated_at": datetime.now()
+            f"items.{item_index}.checked_at": utc_now() if done else None,
+            "updated_at": utc_now()
         }
         if notes is not None:
             update_fields[f"items.{item_index}.notes"] = notes

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -10,7 +9,12 @@ from mcp.server.fastmcp import Context
 from shared_memory.app import mcp
 from shared_memory.clients import get_chroma
 from shared_memory.config import BACKLOG_PRIORITIES, BACKLOG_STATUSES, PROJECT_PREFIX, SHARED_PREFIX
-from shared_memory.helpers import get_project_collection, get_shared_collection, require_session
+from shared_memory.helpers import (
+    get_project_collection,
+    get_shared_collection,
+    require_session,
+    utc_now_iso,
+)
 from shared_memory.state import active_sessions
 
 
@@ -57,7 +61,7 @@ async def memory_add_backlog_item(
     tags = tags or []
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Store in project collection if specified, otherwise shared
     if project:
@@ -268,7 +272,7 @@ async def memory_update_backlog_item(
 
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Search all collections for this item
     collections = await chroma.list_collections()
@@ -365,7 +369,7 @@ async def memory_complete_backlog_item(
 
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Search all collections for this item
     collections = await chroma.list_collections()

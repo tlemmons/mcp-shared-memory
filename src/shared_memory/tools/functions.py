@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-from datetime import datetime
 from typing import Any, Dict, List
 
 from mcp.server.fastmcp import Context
@@ -19,6 +18,7 @@ from shared_memory.helpers import (
     get_shared_collection,
     require_session,
     update_access_stats,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions
 
@@ -92,7 +92,7 @@ async def memory_register_function(
 
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     requires = requires or []
 
     # Determine collection
@@ -238,7 +238,7 @@ async def memory_find_function(
         return error
 
     chroma = await get_chroma()
-    active_sessions[session_id]["last_activity"] = datetime.now().isoformat()
+    active_sessions[session_id]["last_activity"] = utc_now_iso()
     session_info = active_sessions[session_id]
 
     results = []
@@ -575,7 +575,7 @@ async def memory_enrich_function(
         return error
 
     chroma = await get_chroma()
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Find the function in any collection
     collections = await chroma.list_collections()

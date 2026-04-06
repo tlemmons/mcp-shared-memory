@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
 from shared_memory.clients import get_mongo
-from shared_memory.helpers import require_session
+from shared_memory.helpers import require_session, utc_now
 from shared_memory.state import active_sessions
 
 # Agent tiers
@@ -128,7 +128,7 @@ async def memory_project(
     if db is None:
         return json.dumps({"error": "MongoDB unavailable"})
 
-    now = datetime.now()
+    now = utc_now()
 
     # -- CREATE --
     if action == "create":

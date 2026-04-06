@@ -1,7 +1,6 @@
 """Spec management tools - versioned specifications with owner enforcement."""
 
 import json
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -13,6 +12,7 @@ from shared_memory.helpers import (
     get_project_collection,
     get_shared_collection,
     require_session,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions
 
@@ -76,7 +76,7 @@ async def memory_define_spec(
 
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Default owner to session's claude_instance
     if not owner:

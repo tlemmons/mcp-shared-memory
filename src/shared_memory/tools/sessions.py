@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -22,6 +21,8 @@ from shared_memory.helpers import (
     get_shared_collection,
     release_session_locks,
     require_session,
+    utc_now,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions
 
@@ -144,7 +145,7 @@ async def memory_start_session(
                     # Update last_seen on the registered agent
                     db.registered_agents.update_one(
                         {"project": normalized_project, "name": claude_instance},
-                        {"$set": {"last_seen": datetime.now()}, "$inc": {"session_count": 1}}
+                        {"$set": {"last_seen": utc_now()}, "$inc": {"session_count": 1}}
                     )
                 else:
                     # Agent not registered in project registry
@@ -172,7 +173,7 @@ async def memory_start_session(
 
             # Auto-register in agent directory (activity tracking, separate from registry)
             update_fields = {
-                "last_seen": datetime.now(),
+                "last_seen": utc_now(),
                 "last_task": task_description or "",
             }
             if tmux_target:
@@ -182,7 +183,7 @@ async def memory_start_session(
             if spawned_by:
                 update_fields["spawned_by"] = spawned_by
 
-            insert_defaults = {"first_seen": datetime.now()}
+            insert_defaults = {"first_seen": utc_now()}
             if not role_description:
                 insert_defaults["role_description"] = ""
 
@@ -216,8 +217,8 @@ async def memory_start_session(
         "project": project,
         "claude_instance": claude_instance,
         "task": task_description,
-        "started": datetime.now().isoformat(),
-        "last_activity": datetime.now().isoformat(),
+        "started": utc_now_iso(),
+        "last_activity": utc_now_iso(),
         "blocked_by": None,
         "blocked_reason": None,
         "waiting_for_signal": None,
@@ -401,7 +402,7 @@ async def memory_end_session(
     files_modified = files_modified or []
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Store handoff note
     proj_collection = await get_project_collection(chroma, session_info["project"])

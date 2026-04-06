@@ -1,7 +1,6 @@
 """Storage tools - store documents and record learnings."""
 
 import json
-from datetime import datetime
 from typing import Dict, List
 
 from mcp.server.fastmcp import Context
@@ -19,6 +18,7 @@ from shared_memory.helpers import (
     get_project_collection,
     get_shared_collection,
     require_session,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions
 
@@ -94,7 +94,7 @@ async def memory_store(
     files_related = files_related or []
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Determine collection
     if project:
@@ -241,7 +241,7 @@ async def memory_record_learning(
     tags = tags or []
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     if project:
         collection = await get_project_collection(chroma, project)

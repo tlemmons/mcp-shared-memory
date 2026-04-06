@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Dict, List
 
 from mcp.server.fastmcp import Context
@@ -10,7 +10,7 @@ from mcp.server.fastmcp import Context
 from shared_memory.app import mcp
 from shared_memory.clients import get_mongo
 from shared_memory.config import MESSAGE_CATEGORIES, MESSAGE_PRIORITIES, MESSAGE_STATUSES
-from shared_memory.helpers import require_session
+from shared_memory.helpers import require_session, utc_now
 from shared_memory.state import active_sessions
 from shared_memory.tools.projects import _fuzzy_match_agent, _is_project_admin
 
@@ -113,7 +113,7 @@ async def memory_send_message(
     session_info = active_sessions[session_id]
     from_project = session_info.get("project", "")
     target_project = to_project or from_project
-    now = datetime.now()
+    now = utc_now()
 
     db = get_mongo()
     if db is None:
@@ -357,7 +357,7 @@ async def memory_update_message_status(
     if db is None:
         return json.dumps({"error": "MongoDB unavailable"})
 
-    now = datetime.now()
+    now = utc_now()
     update = {"status": status}
 
     # Set appropriate timestamp
@@ -428,7 +428,7 @@ async def memory_heartbeat(
 
     session_info = active_sessions[session_id]
     instance = session_info["claude_instance"]
-    now = datetime.now()
+    now = utc_now()
 
     db = get_mongo()
     if db is None:
@@ -482,7 +482,7 @@ async def memory_get_agent_status(
     cursor = db.agent_status.find(query)
 
     agents = []
-    now = datetime.now()
+    now = utc_now()
     for doc in cursor:
         last_hb = doc.get("last_heartbeat")
         stale = False
@@ -538,7 +538,7 @@ async def memory_list_agents(
     cursor = db.agent_directory.find(mongo_query).sort("last_seen", -1)
 
     agents = []
-    now = datetime.now()
+    now = utc_now()
     for doc in cursor:
         # If query provided, filter by instance name or role_description
         if query:

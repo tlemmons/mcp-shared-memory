@@ -17,6 +17,10 @@ COPY server.py .
 ENV CHROMA_HOST=localhost
 ENV CHROMA_PORT=8001
 ENV PYTHONPATH=/app/src
+# Lock container to UTC so all server-generated timestamps are unambiguous.
+# All datetime.now() calls in code use timezone.utc, but this guards against
+# any host TZ leakage and makes container logs match stored timestamps.
+ENV TZ=UTC
 
 EXPOSE 8080
 

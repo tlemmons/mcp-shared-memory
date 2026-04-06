@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 import chromadb
 from chromadb.config import Settings
@@ -71,7 +71,7 @@ async def get_chroma():
         for name in ["shared_patterns", "shared_context", "shared_work"]:
             await client.get_or_create_collection(
                 name=name,
-                metadata={"type": "shared", "created": datetime.now().isoformat()}
+                metadata={"type": "shared", "created": datetime.now(timezone.utc).isoformat()}
             )
 
         _chroma_client = client

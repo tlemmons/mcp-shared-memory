@@ -3,8 +3,9 @@
 Logs to MongoDB audit_log collection with TTL-based retention.
 """
 
-from datetime import datetime
 from typing import Any, Dict, Optional
+
+from shared_memory.helpers import utc_now
 
 
 def log_audit(
@@ -37,5 +38,5 @@ def log_audit(
         "project": project,
         "session_id": session_id,
         "details": details or {},
-        "timestamp": datetime.now(),
+        "timestamp": utc_now(),
     })

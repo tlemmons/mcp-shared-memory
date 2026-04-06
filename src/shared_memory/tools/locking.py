@@ -1,7 +1,6 @@
 """File locking tools - coordinate exclusive file access."""
 
 import json
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -13,6 +12,7 @@ from shared_memory.helpers import (
     path_matches_pattern,
     release_session_locks,
     require_session,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions, file_locks
 
@@ -54,7 +54,7 @@ async def memory_lock_files(
         return error
 
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Update session activity
     active_sessions[session_id]["last_activity"] = now
@@ -148,7 +148,7 @@ async def memory_unlock_files(
         return error
 
     # Update session activity
-    active_sessions[session_id]["last_activity"] = datetime.now().isoformat()
+    active_sessions[session_id]["last_activity"] = utc_now_iso()
 
     if files is None:
         # Release all locks for this session
@@ -207,7 +207,7 @@ async def memory_get_locks(
         return error
 
     # Update session activity
-    active_sessions[session_id]["last_activity"] = datetime.now().isoformat()
+    active_sessions[session_id]["last_activity"] = utc_now_iso()
 
     all_locks = []
     your_locks = []

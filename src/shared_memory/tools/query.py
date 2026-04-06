@@ -1,7 +1,7 @@
 """Query and retrieval tools - search knowledge base, get documents."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -19,6 +19,8 @@ from shared_memory.helpers import (
     is_expired,
     require_session,
     update_access_stats,
+    utc_now,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions, active_signals
 
@@ -73,7 +75,7 @@ async def memory_query(
         return error
 
     chroma = await get_chroma()
-    active_sessions[session_id]["last_activity"] = datetime.now().isoformat()
+    active_sessions[session_id]["last_activity"] = utc_now_iso()
 
     results = []
 
@@ -265,7 +267,7 @@ async def memory_get_by_id(
 
                 # Update access tracking
                 meta["access_count"] = meta.get("access_count", 0) + 1
-                meta["last_accessed"] = datetime.now().isoformat()
+                meta["last_accessed"] = utc_now_iso()
                 await col.update(ids=[doc_id], metadatas=[meta])
 
                 return json.dumps({
@@ -326,7 +328,7 @@ async def memory_get_active_work(
     active_work = []
     since_cutoff = None
     if since_hours:
-        since_cutoff = (datetime.now() - timedelta(hours=since_hours)).isoformat()
+        since_cutoff = (utc_now() - timedelta(hours=since_hours)).isoformat()
 
     for sid, info in active_sessions.items():
         if sid != session_id:
@@ -350,7 +352,7 @@ async def memory_get_active_work(
 
     # Also get recent work items from Chroma
     work_collection = await get_shared_collection(chroma, "work")
-    cutoff = (datetime.now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
+    cutoff = (utc_now() - timedelta(hours=OVERLAP_WINDOW_HOURS)).isoformat()
 
     where_filter = None
     if project:

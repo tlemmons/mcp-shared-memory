@@ -1,7 +1,6 @@
 """Document lifecycle tools - update work status, archive/restore documents."""
 
 import json
-from datetime import datetime
 from typing import List
 
 from mcp.server.fastmcp import Context
@@ -13,6 +12,7 @@ from shared_memory.helpers import (
     get_project_collection,
     get_shared_collection,
     require_session,
+    utc_now_iso,
 )
 from shared_memory.state import active_sessions, active_signals
 
@@ -62,7 +62,7 @@ async def memory_update_work(
     files_touched = files_touched or []
     chroma = await get_chroma()
     session_info = active_sessions[session_id]
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Update session
     active_sessions[session_id]["last_activity"] = now
@@ -170,7 +170,7 @@ async def memory_change_status(
         return json.dumps({"error": f"Invalid new_status. Must be one of: {DOC_STATUSES}"}, indent=2)
 
     chroma = await get_chroma()
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
 
     # Find the document
     if project:
@@ -250,7 +250,7 @@ async def memory_archive_by_tag(
         return error
 
     chroma = await get_chroma()
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     archived_count = 0
     archived_docs = []
 
@@ -336,7 +336,7 @@ async def memory_restore_by_tag(
         return error
 
     chroma = await get_chroma()
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     restored_count = 0
     restored_docs = []
 
