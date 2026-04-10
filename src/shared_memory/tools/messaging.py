@@ -10,7 +10,7 @@ from mcp.server.fastmcp import Context
 from shared_memory.app import mcp
 from shared_memory.clients import get_mongo
 from shared_memory.config import MESSAGE_CATEGORIES, MESSAGE_PRIORITIES, MESSAGE_STATUSES
-from shared_memory.helpers import require_session, utc_now
+from shared_memory.helpers import parse_timestamp, require_session, utc_now
 from shared_memory.state import active_sessions
 from shared_memory.tools.projects import _fuzzy_match_agent, _is_project_admin
 
@@ -484,7 +484,7 @@ async def memory_get_agent_status(
     agents = []
     now = utc_now()
     for doc in cursor:
-        last_hb = doc.get("last_heartbeat")
+        last_hb = parse_timestamp(doc.get("last_heartbeat"))
         stale = False
         if last_hb:
             age_seconds = (now - last_hb).total_seconds()
@@ -549,7 +549,7 @@ async def memory_list_agents(
             if not (instance_match or role_match or project_match):
                 continue
 
-        last_seen = doc.get("last_seen")
+        last_seen = parse_timestamp(doc.get("last_seen"))
         days_ago = None
         if last_seen:
             days_ago = round((now - last_seen).total_seconds() / 86400, 1)
