@@ -261,6 +261,35 @@ def main():
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    @mcp.custom_route("/hook/compact-log/stats", methods=["GET"])
+    async def hook_compact_stats(request):
+        """Read-only stats for compaction event collection."""
+        from starlette.responses import JSONResponse
+        db = get_mongo()
+        if db is None:
+            return JSONResponse({"error": "MongoDB unavailable"}, status_code=503)
+        try:
+            total = db.compaction_events.count_documents({})
+            by_agent = list(db.compaction_events.aggregate([
+                {"$group": {"_id": "$agent", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+            ]))
+            by_event = list(db.compaction_events.aggregate([
+                {"$group": {"_id": "$event", "count": {"$sum": 1}}},
+            ]))
+            recent = list(db.compaction_events.find({}, {"_id": 0}).sort("logged_at", -1).limit(10))
+            for r in recent:
+                if hasattr(r.get("logged_at"), "isoformat"):
+                    r["logged_at"] = r["logged_at"].isoformat()
+            return JSONResponse({
+                "total_events": total,
+                "by_agent": [{"agent": x["_id"], "count": x["count"]} for x in by_agent],
+                "by_event": [{"event": x["_id"], "count": x["count"]} for x in by_event],
+                "recent": recent,
+            })
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     # Run with the selected transport
     mcp.run(transport=args.transport)
 
