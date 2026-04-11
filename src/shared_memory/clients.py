@@ -177,6 +177,11 @@ def get_mongo():
         api_keys_col.create_index("key_hash", unique=True)
         api_keys_col.create_index("name", unique=True)
 
+        # Compaction events collection (per ADR 822c260ccfda — v3 measurement)
+        compact_col = _mongo_db.compaction_events
+        compact_col.create_index([("agent", 1), ("logged_at", -1)])
+        compact_col.create_index("logged_at")
+
         print(f"Connected to MongoDB at {MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}")
         return _mongo_db
 

@@ -56,9 +56,10 @@ async def memory_start_session(
 
     Args:
         project: Project you're working on (e.g., 'emailtriage', 'nimbus')
-        claude_instance: Identifier for this Claude instance (e.g., 'main', 'agent-1')
+        claude_instance: Identifier for this agent (e.g., 'main', 'agent-1')
         task_description: Brief description of what you're about to work on
-        tmux_target: tmux target for message injection (e.g., 'emailtriage:frontend.0')
+        tmux_target: Optional delivery target routing string (opaque, used by
+            external dispatcher; leave blank unless your setup uses one)
         role_description: What this agent does (e.g., 'Core triage/classification engine').
             Set once - persists across sessions. Other agents can discover you via memory_list_agents.
         working_directory: Your working directory path. Used to auto-identify your agent name
@@ -153,17 +154,54 @@ async def memory_start_session(
                         # Worker self-registration - limited capabilities
                         _is_worker = True
                     else:
-                        # Named agent not registered - warn
+                        # Auto-register as "pending" tier — full tool access,
+                        # coordinator gets notified to approve
+                        db.registered_agents.update_one(
+                            {"project": normalized_project, "name": claude_instance},
+                            {"$set": {
+                                "project": normalized_project,
+                                "name": claude_instance,
+                                "tier": "pending",
+                                "last_seen": utc_now(),
+                                "auto_registered": True,
+                            }, "$inc": {"session_count": 1}},
+                            upsert=True
+                        )
                         valid_agents = [a["name"] for a in db.registered_agents.find(
                             {"project": normalized_project}, {"name": 1}
                         )]
                         _registry_warning = (
-                            f"Agent '{claude_instance}' is not registered in project '{normalized_project}'. "
-                            f"You can send messages and add backlog/learnings, but cannot receive messages. "
-                            f"Ask a project admin to register you with: "
-                            f"memory_project(action='add_agent', name='{normalized_project}', agent='{claude_instance}'). "
-                            f"Registered agents: {', '.join(valid_agents) if valid_agents else 'none'}"
+                            f"Agent '{claude_instance}' auto-registered in project '{normalized_project}' "
+                            f"with 'pending' tier (full tool access). A coordinator should confirm with: "
+                            f"memory_project(action='update_agent', name='{normalized_project}', "
+                            f"agent='{claude_instance}', tier='named'). "
+                            f"Other agents: {', '.join(a for a in valid_agents if a != claude_instance) or 'none'}"
                         )
+                        # Notify coordinator if one exists
+                        try:
+                            coordinator = db.registered_agents.find_one({
+                                "project": normalized_project, "tier": "admin"
+                            })
+                            if coordinator:
+                                db.messages.insert_one({
+                                    "_id": f"msg_{uuid.uuid4().hex[:12]}",
+                                    "from": "system",
+                                    "from_project": normalized_project,
+                                    "to_instance": coordinator["name"],
+                                    "to_project": normalized_project,
+                                    "message": (
+                                        f"New agent '{claude_instance}' auto-registered on "
+                                        f"project '{normalized_project}' with pending tier. "
+                                        f"Approve with: memory_project(action='update_agent', "
+                                        f"name='{normalized_project}', agent='{claude_instance}', tier='named')"
+                                    ),
+                                    "priority": "normal",
+                                    "category": "info",
+                                    "status": "pending",
+                                    "created_at": utc_now(),
+                                })
+                        except Exception:
+                            pass  # Non-fatal if notification fails
 
             # Worker self-registration
             if _is_worker or spawned_by:

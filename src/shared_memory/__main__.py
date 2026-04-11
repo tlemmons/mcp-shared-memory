@@ -6,11 +6,13 @@ Usage:
 """
 
 import argparse
+from pathlib import Path
 
 from shared_memory.app import create_app
 from shared_memory.auth import AUTH_ENABLED
-from shared_memory.clients import get_chroma
-from shared_memory.config import CHROMA_HOST, CHROMA_PORT
+from shared_memory.clients import get_chroma, get_mongo
+from shared_memory.config import CHROMA_HOST, CHROMA_PORT, PROJECT_PREFIX, SHARED_PREFIX
+from shared_memory.helpers import utc_now
 from shared_memory.state import active_sessions, active_signals, file_locks
 
 
@@ -94,8 +96,184 @@ def main():
             "active_signals": len(active_signals)
         }, status_code=200 if status == "healthy" else 503)
 
+    # ── Dashboard (read-only web UI) ──
+
+    dashboard_html_path = Path(__file__).parent / "dashboard.html"
+
+    @mcp.custom_route("/dashboard", methods=["GET"])
+    async def dashboard_page(request):
+        from starlette.responses import HTMLResponse
+        try:
+            html = dashboard_html_path.read_text(encoding="utf-8")
+            return HTMLResponse(html)
+        except Exception as e:
+            return HTMLResponse(f"<h1>Dashboard error</h1><p>{e}</p>", status_code=500)
+
+    @mcp.custom_route("/dashboard/api/sessions", methods=["GET"])
+    async def dashboard_sessions(request):
+        from starlette.responses import JSONResponse
+        sessions = []
+        for sid, info in active_sessions.items():
+            sessions.append({
+                "session_id": sid,
+                "claude_instance": info.get("claude_instance", "unknown"),
+                "project": info.get("project", ""),
+                "task": info.get("task", ""),
+                "started": info.get("started", ""),
+                "last_activity": info.get("last_activity", ""),
+            })
+        sessions.sort(key=lambda s: s.get("started", ""), reverse=True)
+        return JSONResponse({"sessions": sessions})
+
+    @mcp.custom_route("/dashboard/api/agents", methods=["GET"])
+    async def dashboard_agents(request):
+        from starlette.responses import JSONResponse
+        db = get_mongo()
+        if db is None:
+            return JSONResponse({"error": "MongoDB unavailable", "agents": []})
+        try:
+            cursor = db.agent_directory.find({}).sort("last_seen", -1).limit(50)
+            agents = []
+            for doc in cursor:
+                last_seen = doc.get("last_seen")
+                if hasattr(last_seen, "isoformat"):
+                    last_seen = last_seen.isoformat()
+                agents.append({
+                    "project": doc.get("project", ""),
+                    "instance": doc.get("instance", ""),
+                    "role_description": doc.get("role_description", ""),
+                    "last_seen": last_seen,
+                    "session_count": doc.get("session_count", 0),
+                    "last_task": doc.get("last_task", ""),
+                })
+            return JSONResponse({"agents": agents})
+        except Exception as e:
+            return JSONResponse({"error": str(e), "agents": []})
+
+    @mcp.custom_route("/dashboard/api/messages", methods=["GET"])
+    async def dashboard_messages(request):
+        from starlette.responses import JSONResponse
+        db = get_mongo()
+        if db is None:
+            return JSONResponse({"error": "MongoDB unavailable", "messages": []})
+        try:
+            cursor = db.messages.find({}).sort("created_at", -1).limit(30)
+            messages = []
+            for doc in cursor:
+                created = doc.get("created_at")
+                if hasattr(created, "isoformat"):
+                    created = created.isoformat()
+                messages.append({
+                    "id": doc.get("_id", ""),
+                    "from": doc.get("from_instance") or doc.get("from", ""),
+                    "to": doc.get("to_instance", ""),
+                    "category": doc.get("category", ""),
+                    "priority": doc.get("priority", ""),
+                    "status": doc.get("status", ""),
+                    "created": created,
+                    "preview": (doc.get("message", "") or "")[:200],
+                })
+            return JSONResponse({"messages": messages})
+        except Exception as e:
+            return JSONResponse({"error": str(e), "messages": []})
+
+    @mcp.custom_route("/dashboard/api/backlog", methods=["GET"])
+    async def dashboard_backlog(request):
+        from starlette.responses import JSONResponse
+        try:
+            chroma = await get_chroma()
+            all_collections = await chroma.list_collections()
+            items = []
+            priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            for col in all_collections:
+                if not (col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX)):
+                    continue
+                try:
+                    results = await col.get(
+                        where={"type": "backlog"},
+                        include=["metadatas"]
+                    )
+                    for i, meta in enumerate(results.get("metadatas", []) or []):
+                        if not meta:
+                            continue
+                        status = meta.get("backlog_status", "open")
+                        if status not in ("open", "in_progress", "blocked"):
+                            continue
+                        items.append({
+                            "id": results["ids"][i],
+                            "title": meta.get("title", ""),
+                            "project": meta.get("project", "shared") or "shared",
+                            "priority": meta.get("priority", "medium"),
+                            "status": status,
+                            "assigned_to": meta.get("assigned_to") or None,
+                            "updated": meta.get("updated", ""),
+                            "target_version": meta.get("target_version", "") or None,
+                        })
+                except Exception:
+                    continue
+            items.sort(key=lambda x: (
+                priority_order.get(x.get("priority", "medium"), 99),
+                x.get("updated", ""),
+            ), reverse=False)
+            # Reverse updated for descending within same priority
+            items.sort(key=lambda x: (priority_order.get(x.get("priority", "medium"), 99), -_ts(x.get("updated", ""))))
+            return JSONResponse({"items": items[:100]})
+        except Exception as e:
+            return JSONResponse({"error": str(e), "items": []})
+
+    # ── Compaction logging endpoint (per ADR 822c260ccfda) ──
+
+    @mcp.custom_route("/hook/compact-log", methods=["POST"])
+    async def hook_compact_log(request):
+        """Log a compaction event for measurement. Called by Claude Code hooks.
+
+        Expected JSON body:
+        {
+            "event": "PreCompact" | "PostCompact",
+            "agent": "<agent name>",
+            "project": "<project name>",
+            "session_start": "<iso timestamp>",  // optional
+            "reason": "auto" | "manual"          // optional
+        }
+
+        Data is collected for one week to inform the v3 PostCompact decision.
+        """
+        from starlette.responses import JSONResponse
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        db = get_mongo()
+        if db is None:
+            return JSONResponse({"error": "MongoDB unavailable"}, status_code=503)
+
+        try:
+            db.compaction_events.insert_one({
+                "event": body.get("event", "unknown"),
+                "agent": body.get("agent", "unknown"),
+                "project": body.get("project", ""),
+                "session_start": body.get("session_start", ""),
+                "reason": body.get("reason", ""),
+                "logged_at": utc_now(),
+            })
+            return JSONResponse({"status": "logged"})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     # Run with the selected transport
     mcp.run(transport=args.transport)
+
+
+def _ts(iso_str: str) -> float:
+    """Parse ISO timestamp to epoch seconds, 0 on failure."""
+    if not iso_str:
+        return 0.0
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(iso_str).timestamp()
+    except Exception:
+        return 0.0
 
 
 if __name__ == "__main__":

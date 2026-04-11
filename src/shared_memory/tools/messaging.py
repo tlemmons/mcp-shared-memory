@@ -16,7 +16,11 @@ from shared_memory.tools.projects import _fuzzy_match_agent, _is_project_admin
 
 
 def get_tmux_target_for_instance(instance_name: str) -> str:
-    """Find tmux target for a Claude instance from active sessions."""
+    """Look up a delivery target for an agent from active sessions.
+
+    The field name is kept for backward compatibility with the external
+    dispatcher process, but the value is just an opaque routing string.
+    """
     for session_id, info in active_sessions.items():
         if info["claude_instance"] == instance_name and info.get("tmux_target"):
             return info["tmux_target"]
@@ -80,25 +84,26 @@ async def memory_send_message(
     ctx: Context = None
 ) -> str:
     """
-    Send a message to another Claude instance.
+    Send a note to another agent in the project.
 
-    Messages are persisted to MongoDB and delivered via tmux injection.
-    Supports full lifecycle tracking: pending → delivered → received → completed/failed.
+    Notes are persisted to MongoDB and appear in the recipient's inbox on their
+    next session start. Supports full lifecycle tracking: pending, delivered,
+    received, completed, failed.
 
     Args:
         session_id: Your session ID
-        to_instance: Target Claude instance name (e.g., 'frontend', 'backend', or '*' for all)
-        message: The message to send
-        priority: Message priority (urgent, normal, low) - urgent interrupts, others wait
-        category: Message category - determines how receiver should handle it:
+        to_instance: Target agent name (e.g., 'frontend', 'backend', or '*' for all)
+        message: The note content
+        priority: Note priority (urgent, normal, low)
+        category: Note category - determines how the recipient should handle it:
             contract - exact format/spec that must be followed, no deviation
             task - work assignment
             question - needs a response
             info - FYI, no action needed (default)
             review - look at this and confirm or flag issues
-            blocker - STOP what you are doing until you discuss with coordinator or user
-        to_project: Target project (defaults to your project; use for cross-project messages)
-        reply_to: Message ID this is replying to (for threading conversations)
+            blocker - STOP work until discussed with coordinator or user
+        to_project: Target project (defaults to your project; use for cross-project notes)
+        reply_to: Note ID this is replying to (for threading conversations)
     """
     error = require_session(session_id)
     if error:
@@ -210,17 +215,17 @@ async def memory_get_messages(
     ctx: Context = None
 ) -> str:
     """
-    Get pending messages for your Claude instance.
+    Get pending notes for your agent.
 
-    Returns messages sent to you by other Claudes or the orchestrator.
-    Messages are scoped by project - you only see messages sent to your project.
+    Returns notes addressed to you by other agents. Notes are scoped by project
+    — you only see notes sent to your project.
 
     Args:
         session_id: Your session ID
-        include_delivered: Include already delivered messages (default False)
-        limit: Maximum messages to return (default 20)
-        message_id: Fetch a specific message by ID (admin/coordinator only)
-        for_instance: View messages for a different agent in your project (admin/coordinator only)
+        include_delivered: Include already delivered notes (default False)
+        limit: Maximum notes to return (default 20)
+        message_id: Fetch a specific note by ID (admin/coordinator only)
+        for_instance: View notes for a different agent in your project (admin/coordinator only)
     """
     error = require_session(session_id)
     if error:

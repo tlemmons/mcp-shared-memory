@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 from shared_memory.app import mcp
 from shared_memory.clients import get_chroma
 from shared_memory.config import PROJECT_PREFIX, SHARED_PREFIX
-from shared_memory.helpers import format_age, format_staleness_warning, require_session
+from shared_memory.helpers import format_age, format_staleness_warning, parse_timestamp, require_session
 from shared_memory.state import active_sessions
 
 
@@ -78,8 +78,15 @@ async def memory_search_global(
             except Exception:
                 continue
 
-    # Sort by relevance and limit
-    all_results.sort(key=lambda x: x["relevance"], reverse=True)
+    # Tiered sort: relevance bands + recency within each band
+    def _sort_key(r):
+        rel = max(0, r["relevance"])
+        band = 0 if rel > 0.70 else (1 if rel > 0.50 else 2)
+        ts = parse_timestamp(r.get("updated") or r.get("created"))
+        epoch = ts.timestamp() if ts else 0
+        return (band, -epoch)
+
+    all_results.sort(key=_sort_key)
     all_results = all_results[:limit]
 
     # Format relevance as percentage

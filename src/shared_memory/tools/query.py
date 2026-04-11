@@ -17,6 +17,7 @@ from shared_memory.helpers import (
     get_project_collection,
     get_shared_collection,
     is_expired,
+    parse_timestamp,
     require_session,
     update_access_stats,
     utc_now,
@@ -202,8 +203,18 @@ async def memory_query(
             "message": "No matching memories found. This might be new territory - consider recording what you learn!"
         }, indent=2)
 
-    # Sort by relevance (highest first) and limit total results
-    results.sort(key=lambda x: x["relevance"], reverse=True)
+    # Tiered sort: group by relevance band, then sort by recency within each band.
+    # This prevents old docs from outranking fresh ones on the same topic.
+    def _sort_key(r):
+        # Relevance band: >70% = 0 (best), 50-70% = 1, <50% = 2
+        pct = int(r["relevance"].rstrip("%")) / 100
+        band = 0 if pct > 0.70 else (1 if pct > 0.50 else 2)
+        # Within band, sort by updated timestamp descending (newest first)
+        ts = parse_timestamp(r.get("updated") or r.get("created"))
+        epoch = ts.timestamp() if ts else 0
+        return (band, -epoch)
+
+    results.sort(key=_sort_key)
     results = results[:limit]
 
     return json.dumps({

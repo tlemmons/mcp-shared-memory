@@ -8,7 +8,7 @@ def test_all_39_tools_register():
     mcp = create_app()
     tools = mcp._tool_manager._tools
 
-    assert len(tools) == 40, f"Expected 40 tools, got {len(tools)}: {sorted(tools.keys())}"
+    assert len(tools) == 41, f"Expected 41 tools, got {len(tools)}: {sorted(tools.keys())}"
 
 
 def test_expected_tools_present():

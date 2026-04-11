@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Shared Memory — Activity Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .status-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .status-pill.healthy { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+  .status-pill.stale { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+  .status-pill.error { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+  .last-refresh { color: var(--muted); font-size: 12px; }
+  main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 16px 24px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    min-height: 200px;
+  }
+  .panel h2 {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .panel-count {
+    color: var(--muted);
+    font-weight: normal;
+    font-size: 12px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  td {
+    padding: 8px;
+    border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(88, 166, 255, 0.05); }
+  .agent-name { font-weight: 600; color: var(--text); }
+  .project-tag {
+    display: inline-block;
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .priority-critical { color: var(--red); font-weight: 600; }
+  .priority-high { color: var(--yellow); }
+  .priority-medium { color: var(--text); }
+  .priority-low { color: var(--muted); }
+  .empty {
+    color: var(--muted);
+    font-style: italic;
+    padding: 20px;
+    text-align: center;
+  }
+  .error-box {
+    color: var(--red);
+    padding: 12px;
+    background: rgba(248, 81, 73, 0.1);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+  }
+  .two-col { grid-column: span 2; }
+  .age { color: var(--muted); font-size: 12px; }
+  .task { color: var(--text); font-size: 12px; max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  footer { text-align: center; color: var(--muted); padding: 20px; font-size: 12px; }
+  code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Shared Memory — Activity Dashboard</h1>
+  <div>
+    <span id="health-pill" class="status-pill healthy">healthy</span>
+    <span class="last-refresh">Last refresh: <span id="last-refresh">—</span></span>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Active Sessions <span id="sessions-count" class="panel-count">—</span></h2>
+    <div id="sessions-body"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section class="panel">
+    <h2>Agent Directory <span id="agents-count" class="panel-count">—</span></h2>
+    <div id="agents-body"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section class="panel two-col">
+    <h2>Recent Messages <span id="messages-count" class="panel-count">—</span></h2>
+    <div id="messages-body"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section class="panel two-col">
+    <h2>Open Backlog <span id="backlog-count" class="panel-count">—</span></h2>
+    <div id="backlog-body"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<footer>Auto-refresh every 30 seconds · <a href="/health" style="color: var(--accent);">Server health</a></footer>
+
+<script>
+function formatAge(iso) {
+  if (!iso) return '—';
+  const then = new Date(iso);
+  const diff = (Date.now() - then.getTime()) / 1000;
+  if (diff < 60) return Math.floor(diff) + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function fetchJson(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function renderSessions(data) {
+  const el = document.getElementById('sessions-body');
+  document.getElementById('sessions-count').textContent = '(' + (data.sessions?.length || 0) + ')';
+  if (data.error) { el.innerHTML = '<div class="error-box">' + escapeHtml(data.error) + '</div>'; return; }
+  if (!data.sessions || data.sessions.length === 0) {
+    el.innerHTML = '<div class="empty">No active sessions</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Agent</th><th>Project</th><th>Task</th><th>Started</th></tr></thead><tbody>';
+  for (const s of data.sessions) {
+    html += '<tr>';
+    html += '<td class="agent-name">' + escapeHtml(s.claude_instance) + '</td>';
+    html += '<td><span class="project-tag">' + escapeHtml(s.project) + '</span></td>';
+    html += '<td class="task" title="' + escapeHtml(s.task) + '">' + escapeHtml(s.task || '—') + '</td>';
+    html += '<td class="age">' + formatAge(s.started) + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderAgents(data) {
+  const el = document.getElementById('agents-body');
+  document.getElementById('agents-count').textContent = '(' + (data.agents?.length || 0) + ')';
+  if (data.error) { el.innerHTML = '<div class="error-box">' + escapeHtml(data.error) + '</div>'; return; }
+  if (!data.agents || data.agents.length === 0) {
+    el.innerHTML = '<div class="empty">No agents</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Agent</th><th>Project</th><th>Last Seen</th><th>Sessions</th></tr></thead><tbody>';
+  for (const a of data.agents.slice(0, 20)) {
+    html += '<tr>';
+    html += '<td class="agent-name">' + escapeHtml(a.instance) + '</td>';
+    html += '<td><span class="project-tag">' + escapeHtml(a.project) + '</span></td>';
+    html += '<td class="age">' + formatAge(a.last_seen) + '</td>';
+    html += '<td>' + escapeHtml(a.session_count) + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderMessages(data) {
+  const el = document.getElementById('messages-body');
+  document.getElementById('messages-count').textContent = '(' + (data.messages?.length || 0) + ')';
+  if (data.error) { el.innerHTML = '<div class="error-box">' + escapeHtml(data.error) + '</div>'; return; }
+  if (!data.messages || data.messages.length === 0) {
+    el.innerHTML = '<div class="empty">No recent messages</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>From</th><th>To</th><th>Category</th><th>Status</th><th>When</th><th>Note</th></tr></thead><tbody>';
+  for (const m of data.messages.slice(0, 15)) {
+    html += '<tr>';
+    html += '<td class="agent-name">' + escapeHtml(m.from) + '</td>';
+    html += '<td class="agent-name">' + escapeHtml(m.to) + '</td>';
+    html += '<td>' + escapeHtml(m.category) + '</td>';
+    html += '<td>' + escapeHtml(m.status) + '</td>';
+    html += '<td class="age">' + formatAge(m.created) + '</td>';
+    html += '<td class="task" title="' + escapeHtml(m.preview) + '">' + escapeHtml((m.preview || '').slice(0, 80)) + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function renderBacklog(data) {
+  const el = document.getElementById('backlog-body');
+  document.getElementById('backlog-count').textContent = '(' + (data.items?.length || 0) + ')';
+  if (data.error) { el.innerHTML = '<div class="error-box">' + escapeHtml(data.error) + '</div>'; return; }
+  if (!data.items || data.items.length === 0) {
+    el.innerHTML = '<div class="empty">No open backlog items</div>';
+    return;
+  }
+  let html = '<table><thead><tr><th>Title</th><th>Project</th><th>Priority</th><th>Assignee</th><th>Age</th></tr></thead><tbody>';
+  for (const b of data.items.slice(0, 25)) {
+    html += '<tr>';
+    html += '<td>' + escapeHtml(b.title) + '</td>';
+    html += '<td><span class="project-tag">' + escapeHtml(b.project) + '</span></td>';
+    html += '<td class="priority-' + escapeHtml(b.priority) + '">' + escapeHtml(b.priority) + '</td>';
+    html += '<td class="agent-name">' + escapeHtml(b.assigned_to || '—') + '</td>';
+    html += '<td class="age">' + formatAge(b.updated) + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function updateHealth() {
+  const data = await fetchJson('/health');
+  const pill = document.getElementById('health-pill');
+  if (data.error || data.status !== 'healthy') {
+    pill.textContent = 'degraded';
+    pill.className = 'status-pill error';
+  } else {
+    pill.textContent = 'healthy · ' + data.active_sessions + ' sessions · ' + data.active_locks + ' locks';
+    pill.className = 'status-pill healthy';
+  }
+}
+
+async function refresh() {
+  const [sessions, agents, messages, backlog] = await Promise.all([
+    fetchJson('/dashboard/api/sessions'),
+    fetchJson('/dashboard/api/agents'),
+    fetchJson('/dashboard/api/messages'),
+    fetchJson('/dashboard/api/backlog'),
+  ]);
+  renderSessions(sessions);
+  renderAgents(agents);
+  renderMessages(messages);
+  renderBacklog(backlog);
+  await updateHealth();
+  document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

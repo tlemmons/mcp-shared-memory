@@ -411,3 +411,194 @@ async def memory_complete_backlog_item(
             continue
 
     return json.dumps({"error": f"Backlog item not found: {item_id}"})
+
+
+@mcp.tool()
+async def memory_batch_backlog(
+    session_id: str,
+    action: str,
+    items: list,
+    ctx: Context = None
+) -> str:
+    """
+    Batch backlog operations — create, update, or complete multiple items in one call.
+
+    Much more efficient than calling memory_add/update/complete_backlog_item individually
+    when you have many items to process.
+
+    Actions:
+        create   - Create multiple items. Each item needs: title, description.
+                   Optional: priority, project, assigned_to, tags, target_version.
+        update   - Update multiple items. Each item needs: id.
+                   Optional: status, priority, assigned_to, title, description, target_version.
+        complete - Complete multiple items. Each item needs: id.
+                   Optional: resolution, wont_do (bool).
+
+    Args:
+        session_id: Your session ID
+        action: One of: create, update, complete
+        items: List of item dicts (see action descriptions for required/optional fields)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    if action not in ("create", "update", "complete"):
+        return json.dumps({"error": f"Unknown action '{action}'. Use: create, update, complete"})
+
+    if not items or not isinstance(items, list):
+        return json.dumps({"error": "items must be a non-empty list"})
+
+    chroma = await get_chroma()
+    session_info = active_sessions[session_id]
+    now = utc_now_iso()
+    results = {"succeeded": 0, "failed": 0, "ids": [], "errors": []}
+
+    if action == "create":
+        for i, item in enumerate(items):
+            try:
+                title = item.get("title")
+                description = item.get("description", "")
+                if not title:
+                    results["failed"] += 1
+                    results["errors"].append({"index": i, "error": "title is required"})
+                    continue
+
+                project = item.get("project", "")
+                priority = item.get("priority", "medium")
+                if priority not in BACKLOG_PRIORITIES:
+                    priority = "medium"
+
+                batch_id = f"backlog_{hashlib.sha256(f'{title}:{now}:{i}'.encode()).hexdigest()[:12]}"
+                content = f"# {title}\n\n{description}"
+
+                if project:
+                    col = await get_project_collection(chroma, project)
+                else:
+                    col = await get_shared_collection(chroma, "work")
+
+                metadata = {
+                    "title": title,
+                    "type": "backlog",
+                    "backlog_status": "open",
+                    "priority": priority,
+                    "project": project,
+                    "assigned_to": item.get("assigned_to", ""),
+                    "tags": json.dumps(item.get("tags", [])),
+                    "target_version": item.get("target_version", ""),
+                    "deferred_reason": "",
+                    "created_by": session_info["claude_instance"],
+                    "created": now,
+                    "updated": now,
+                    "edit_count": 0,
+                }
+
+                await col.add(ids=[batch_id], documents=[content], metadatas=[metadata])
+                results["succeeded"] += 1
+                results["ids"].append(batch_id)
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"index": i, "error": str(e)})
+
+    elif action == "update":
+        collections = await chroma.list_collections()
+        for i, item in enumerate(items):
+            try:
+                update_id = item.get("id")
+                if not update_id:
+                    results["failed"] += 1
+                    results["errors"].append({"index": i, "error": "id is required"})
+                    continue
+
+                found = False
+                for col in collections:
+                    if not (col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX)):
+                        continue
+                    try:
+                        result = await col.get(ids=[update_id], include=["metadatas", "documents"])
+                        if result["ids"]:
+                            meta = result["metadatas"][0]
+                            doc = result["documents"][0]
+
+                            for field in ("status", "priority", "assigned_to", "title",
+                                          "description", "target_version"):
+                                if field in item:
+                                    if field == "status":
+                                        meta["backlog_status"] = item[field]
+                                    elif field == "description":
+                                        doc = f"# {meta['title']}\n\n{item[field]}"
+                                    elif field == "title":
+                                        meta["title"] = item[field]
+                                    else:
+                                        meta[field] = item[field]
+
+                            meta["updated"] = now
+                            meta["updated_by"] = session_info["claude_instance"]
+                            meta["edit_count"] = meta.get("edit_count", 0) + 1
+
+                            await col.update(ids=[update_id], documents=[doc], metadatas=[meta])
+                            results["succeeded"] += 1
+                            results["ids"].append(update_id)
+                            found = True
+                            break
+                    except Exception:
+                        continue
+
+                if not found:
+                    results["failed"] += 1
+                    results["errors"].append({"index": i, "error": f"Item {update_id} not found"})
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"index": i, "error": str(e)})
+
+    elif action == "complete":
+        collections = await chroma.list_collections()
+        for i, item in enumerate(items):
+            try:
+                complete_id = item.get("id")
+                if not complete_id:
+                    results["failed"] += 1
+                    results["errors"].append({"index": i, "error": "id is required"})
+                    continue
+
+                wont_do = item.get("wont_do", False)
+                resolution = item.get("resolution", "")
+                new_status = "wont_do" if wont_do else "done"
+
+                found = False
+                for col in collections:
+                    if not (col.name.startswith(PROJECT_PREFIX) or col.name.startswith(SHARED_PREFIX)):
+                        continue
+                    try:
+                        result = await col.get(ids=[complete_id], include=["metadatas", "documents"])
+                        if result["ids"]:
+                            meta = result["metadatas"][0]
+                            doc = result["documents"][0]
+
+                            meta["backlog_status"] = new_status
+                            meta["completed_at"] = now
+                            meta["completed_by"] = session_info["claude_instance"]
+                            meta["updated"] = now
+                            if resolution:
+                                meta["resolution"] = resolution
+                                doc += f"\n\n## Resolution\n{resolution}"
+
+                            await col.update(ids=[complete_id], documents=[doc], metadatas=[meta])
+                            results["succeeded"] += 1
+                            results["ids"].append(complete_id)
+                            found = True
+                            break
+                    except Exception:
+                        continue
+
+                if not found:
+                    results["failed"] += 1
+                    results["errors"].append({"index": i, "error": f"Item {complete_id} not found"})
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({"index": i, "error": str(e)})
+
+    if not results["errors"]:
+        del results["errors"]
+
+    return json.dumps(results, indent=2)
