@@ -54,16 +54,19 @@ def get_pending_messages_for_instance(instance_name: str, project: str = None) -
 
     messages = []
     for doc in db.messages.find(query):
+        created_at = doc.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
         entry = {
             "id": doc["_id"],
-            "to": doc["to_instance"],
+            "to": doc.get("to_instance", doc.get("to", "?")),
             "to_project": doc.get("to_project", ""),
-            "from_instance": doc["from_instance"],
+            "from_instance": doc.get("from_instance", doc.get("from", "?")),
             "from_project": doc.get("from_project", ""),
             "category": doc.get("category", "info"),
-            "message": doc["message"],
-            "priority": doc["priority"],
-            "created": doc["created_at"].isoformat() if doc["created_at"] else None
+            "message": doc.get("message", ""),
+            "priority": doc.get("priority", "normal"),
+            "created": created_at,
         }
         if doc.get("reply_to"):
             entry["reply_to"] = doc["reply_to"]
@@ -310,16 +313,19 @@ async def memory_get_messages(
     priority_sort = {"urgent": 0, "normal": 1, "low": 2}
     messages = []
     for doc in cursor:
+        created_at = doc.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
         entry = {
             "id": doc["_id"],
-            "from": doc["from_instance"],
+            "from": doc.get("from_instance", doc.get("from", "?")),
             "from_project": doc.get("from_project", ""),
             "category": doc.get("category", "info"),
-            "message": doc["message"],
-            "priority": doc["priority"],
-            "status": doc["status"],
-            "created": doc["created_at"].isoformat() if doc["created_at"] else None,
-            "delivered": doc["status"] != "pending"
+            "message": doc.get("message", ""),
+            "priority": doc.get("priority", "normal"),
+            "status": doc.get("status", "pending"),
+            "created": created_at,
+            "delivered": doc.get("status", "pending") != "pending"
         }
         if doc.get("reply_to"):
             entry["reply_to"] = doc["reply_to"]
