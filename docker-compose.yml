@@ -2,8 +2,12 @@ services:
   chromadb:
     image: chromadb/chroma:latest
     container_name: mcp-chromadb
+    # Chroma 1.x persists to /data by default. The previous mount at
+    # /chroma/chroma was silently ignored, causing the Apr 2026 data loss
+    # incident when the pre-existing container was recreated. Keep this
+    # at /data and never change it without testing a container rebuild.
     volumes:
-      - chroma-data:/chroma/chroma
+      - chroma-data:/data
     ports:
       - "${CHROMA_PORT:-8001}:8000"
     healthcheck:
