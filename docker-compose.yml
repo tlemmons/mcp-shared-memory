@@ -1,6 +1,10 @@
 services:
   chromadb:
-    image: chromadb/chroma:latest
+    # Pinned version — NEVER change to :latest without testing a full
+    # container rebuild. Chroma has changed its default persist directory
+    # between versions and we lost data the last time a rebuild happened
+    # against a mount pointed at the wrong path.
+    image: chromadb/chroma:0.6.3
     container_name: mcp-chromadb
     # Chroma 1.x persists to /data by default. The previous mount at
     # /chroma/chroma was silently ignored, causing the Apr 2026 data loss
@@ -19,12 +23,13 @@ services:
     restart: unless-stopped
 
   mongodb:
-    image: mongo:7
+    # Pinned version for the same reason as chromadb above.
+    image: mongo:7.0
     container_name: mcp-mongodb
     volumes:
       - mongo-data:/data/db
     ports:
-      - "${MONGO_PORT:-27018}:27017"
+      - "${MONGO_PORT:-27019}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-mcp_orch}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-changeme}
