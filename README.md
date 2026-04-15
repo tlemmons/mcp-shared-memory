@@ -145,12 +145,14 @@ Add to `~/.claude.json` (or your project's `.mcp.json`):
 {
   "mcpServers": {
     "shared-memory": {
-      "type": "streamable-http",
+      "type": "http",
       "url": "http://localhost:8080/mcp"
     }
   }
 }
 ```
+
+> **Note on transport naming:** the underlying MCP protocol is "streamable HTTP", but the value in the JSON config file is `"http"` for Claude Code 2.x. Using `"streamable-http"` in the config triggers a schema validation error.
 
 ### Cursor
 
@@ -160,7 +162,7 @@ Add to `.cursor/mcp.json` in your project root:
 {
   "mcpServers": {
     "shared-memory": {
-      "type": "streamable-http",
+      "type": "http",
       "url": "http://localhost:8080/mcp"
     }
   }
