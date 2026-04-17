@@ -22,7 +22,7 @@
 set -euo pipefail
 
 BACKUP_DIR="${1:-$HOME/mongo-backups}"
-CONTAINER_NAME="${2:-mcp-mongodb-new}"
+CONTAINER_NAME="${2:-mcp-mongodb}"
 KEEP_BACKUPS=14
 
 # Load creds from .env if available

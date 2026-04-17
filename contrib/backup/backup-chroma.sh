@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BACKUP_DIR="${1:-$HOME/chroma-backups}"
-CONTAINER_NAME="${CHROMA_CONTAINER:-claude-chroma-new}"
+CONTAINER_NAME="${CHROMA_CONTAINER:-mcp-chromadb}"
 KEEP_BACKUPS=14
 
 mkdir -p "$BACKUP_DIR"

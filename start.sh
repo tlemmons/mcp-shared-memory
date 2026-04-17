@@ -1,6 +1,7 @@
 #!/bin/bash
-# Startup script for MCP Memory Server
-# Waits for Chroma to be ready before starting MCP server
+# Startup script for MCP Memory Server — compose-managed since 2026-04-17.
+# Brings up chromadb + mongodb first, waits for Chroma health, then brings
+# up mcp-server.
 
 set -e
 
@@ -8,8 +9,10 @@ CHROMA_URL="http://localhost:8001/api/v2/heartbeat"
 MAX_WAIT=60
 WAIT_INTERVAL=2
 
-echo "Starting Chroma container..."
-docker start claude-chroma 2>/dev/null || true
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+echo "Starting Chroma + MongoDB via docker compose..."
+docker compose up -d chromadb mongodb
 
 echo "Waiting for Chroma to be ready (max ${MAX_WAIT}s)..."
 elapsed=0
@@ -28,15 +31,14 @@ if [ $elapsed -ge $MAX_WAIT ]; then
 fi
 
 echo "Starting MCP Memory Server..."
-cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # Only rebuild if no cached image exists; avoids needing Docker Hub on boot
-if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q 'mcp_ragarch-mcp-rag-arch:latest'; then
+if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q 'mcp_ragarch-mcp-server:latest'; then
     echo "Using cached image (skipping build)"
-    docker compose up -d
+    docker compose up -d mcp-server
 else
     echo "No cached image found, building..."
-    docker compose up -d --build
+    docker compose up -d --build mcp-server
 fi
 
 echo "Startup complete"

@@ -1,10 +1,12 @@
 services:
   chromadb:
-    # Pinned version — NEVER change to :latest without testing a full
-    # container rebuild. Chroma has changed its default persist directory
-    # between versions and we lost data the last time a rebuild happened
-    # against a mount pointed at the wrong path.
-    image: chromadb/chroma:0.6.3
+    # Pinned to a LOCAL tag of the image that created our existing data. The
+    # real image ID is sha256:501769453712... (Chroma 1.x, pulled 2025-12-12).
+    # Downgrading to 0.6.x breaks the SQLite schema — seen 2026-04-17 during
+    # migration: 0 collections visible because 0.6.x can't read 1.x data.
+    # To upgrade: test a full container rebuild on a volume COPY first.
+    image: chromadb/chroma:local-known-working
+    pull_policy: never
     container_name: mcp-chromadb
     # Chroma 1.x persists to /data by default. The previous mount at
     # /chroma/chroma was silently ignored, causing the Apr 2026 data loss
@@ -15,7 +17,9 @@ services:
     ports:
       - "${CHROMA_PORT:-8001}:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      # This image doesn't ship curl/wget. Use bash's /dev/tcp to check if
+      # the HTTP port accepts connections (opens socket, immediately closes).
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000'"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -71,5 +75,13 @@ services:
       start_period: 15s
 
 volumes:
+  # These volumes are declared external so compose never creates or destroys
+  # them — populated in 2026-04-14 during data-loss recovery. A fresh deploy
+  # elsewhere should remove the `external` + `name` fields so compose creates
+  # them automatically on first `up -d`.
   chroma-data:
+    external: true
+    name: chroma-persistent
   mongo-data:
+    external: true
+    name: mcp-mongo-persistent
