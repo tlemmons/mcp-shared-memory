@@ -1,4 +1,14 @@
-"""Database query tools - read-only access to external databases."""
+"""Database query tools - read-only access to external databases.
+
+Supports mssql and mysql. To add a new database, set env vars:
+    DB_<NAME>_TYPE=mssql|mysql
+    DB_<NAME>_HOST=<host>
+    DB_<NAME>_PORT=<port>   (default 1433 mssql, 3306 mysql)
+    DB_<NAME>_NAME=<database>
+    DB_<NAME>_USER=<user>
+    DB_<NAME>_PASS=<password>
+    DB_<NAME>_READONLY=true
+"""
 
 import json
 import re
@@ -7,17 +17,24 @@ from datetime import datetime
 from mcp.server.fastmcp import Context
 
 from shared_memory.app import mcp
-from shared_memory.config import DB_REGISTRY, SQL_BLOCKED_KEYWORDS
+from shared_memory.config import (
+    DB_REGISTRY,
+    SQL_BLOCKED_KEYWORDS,
+    SQL_BLOCKED_KEYWORDS_MSSQL,
+    SQL_BLOCKED_KEYWORDS_MYSQL,
+)
 from shared_memory.helpers import require_session
 
 
 def _get_db_connection(db_name: str):
-    """Get a connection to a registered database."""
+    """Get a connection to a registered database. Returns (conn, error)."""
     if db_name not in DB_REGISTRY:
         return None, f"Database '{db_name}' not registered. Available: {list(DB_REGISTRY.keys())}"
 
     config = DB_REGISTRY[db_name]
-    if config["type"] == "mssql":
+    db_type = config["type"]
+
+    if db_type == "mssql":
         try:
             import pymssql
             conn = pymssql.connect(
@@ -28,37 +45,131 @@ def _get_db_connection(db_name: str):
                 database=config["database"],
                 login_timeout=10,
                 timeout=config.get("query_timeout", 30),
-                as_dict=True
+                as_dict=True,
             )
             return conn, None
+        except ImportError:
+            return None, "pymssql not installed — add to requirements.txt or install the [mssql] extra"
         except Exception as e:
-            return None, f"Connection failed: {str(e)}"
+            return None, f"MSSQL connection failed: {str(e)}"
+
+    elif db_type == "mysql":
+        try:
+            import pymysql
+            import pymysql.cursors
+            conn = pymysql.connect(
+                host=config["host"],
+                port=config["port"],
+                user=config["user"],
+                password=config["password"],
+                database=config["database"],
+                connect_timeout=10,
+                read_timeout=config.get("query_timeout", 30),
+                cursorclass=pymysql.cursors.DictCursor,
+            )
+            return conn, None
+        except ImportError:
+            return None, "pymysql not installed — add pymysql to requirements.txt"
+        except Exception as e:
+            return None, f"MySQL connection failed: {str(e)}"
+
     else:
-        return None, f"Unsupported database type: {config['type']}"
+        return None, f"Unsupported database type: {db_type} (supported: mssql, mysql)"
 
 
-def _validate_sql_readonly(sql: str) -> str | None:
-    """Validate SQL is read-only. Returns error message or None if safe."""
+def _validate_sql_readonly(sql: str, db_type: str = "mssql") -> str | None:
+    """Validate SQL is read-only. Returns error message or None if safe.
+
+    Uses dialect-specific additional blocklists on top of the universal one.
+    """
     stripped = sql.strip().rstrip(";").strip()
 
-    # Must start with SELECT or WITH (for CTEs)
-    if not re.match(r'^(SELECT|WITH)\b', stripped, re.IGNORECASE):
+    if not re.match(r"^(SELECT|WITH)\b", stripped, re.IGNORECASE):
         return "Only SELECT queries are allowed (query must start with SELECT or WITH)"
 
-    # Check for blocked keywords anywhere in the query
     match = SQL_BLOCKED_KEYWORDS.search(stripped)
     if match:
         return f"Blocked keyword detected: '{match.group()}'. Only read-only queries are allowed."
 
-    # Block semicolons (prevent multi-statement injection)
+    if db_type == "mssql":
+        match = SQL_BLOCKED_KEYWORDS_MSSQL.search(stripped)
+        if match:
+            return f"MSSQL-specific blocked keyword: '{match.group()}'."
+    elif db_type == "mysql":
+        match = SQL_BLOCKED_KEYWORDS_MYSQL.search(stripped)
+        if match:
+            return f"MySQL-specific blocked keyword: '{match.group()}'."
+
     if ";" in stripped:
         return "Multiple statements (semicolons) are not allowed"
 
-    # Block comments that could hide injection
     if "--" in stripped or "/*" in stripped:
         return "SQL comments are not allowed in queries"
 
     return None
+
+
+# ── Dialect-specific schema queries ──
+
+_TABLE_LIST_MSSQL = """
+    SELECT
+        t.TABLE_SCHEMA as [schema],
+        t.TABLE_NAME as name,
+        t.TABLE_SCHEMA + '.' + t.TABLE_NAME as qualified_name,
+        p.rows as row_count
+    FROM INFORMATION_SCHEMA.TABLES t
+    LEFT JOIN sys.partitions p
+        ON p.object_id = OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME)
+        AND p.index_id IN (0, 1)
+    WHERE t.TABLE_TYPE = 'BASE TABLE'
+    ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME
+"""
+
+_TABLE_LIST_MYSQL = """
+    SELECT
+        TABLE_SCHEMA AS `schema`,
+        TABLE_NAME AS name,
+        CONCAT(TABLE_SCHEMA, '.', TABLE_NAME) AS qualified_name,
+        TABLE_ROWS AS row_count
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_TYPE = 'BASE TABLE'
+      AND TABLE_SCHEMA = DATABASE()
+    ORDER BY TABLE_NAME
+"""
+
+_TABLE_COLUMNS_MSSQL = """
+    SELECT
+        c.COLUMN_NAME as name,
+        c.DATA_TYPE as type,
+        c.CHARACTER_MAXIMUM_LENGTH as max_length,
+        c.IS_NULLABLE as nullable,
+        c.COLUMN_DEFAULT as default_value,
+        CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 'YES' ELSE 'NO' END as is_primary_key
+    FROM INFORMATION_SCHEMA.COLUMNS c
+    LEFT JOIN (
+        SELECT ku.COLUMN_NAME, ku.TABLE_NAME
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+        JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
+            ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
+        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+    ) pk ON pk.TABLE_NAME = c.TABLE_NAME AND pk.COLUMN_NAME = c.COLUMN_NAME
+    WHERE c.TABLE_NAME = %s
+    ORDER BY c.ORDINAL_POSITION
+"""
+
+_TABLE_COLUMNS_MYSQL = """
+    SELECT
+        COLUMN_NAME AS name,
+        DATA_TYPE AS type,
+        CHARACTER_MAXIMUM_LENGTH AS max_length,
+        IS_NULLABLE AS nullable,
+        COLUMN_DEFAULT AS default_value,
+        CASE WHEN COLUMN_KEY = 'PRI' THEN 'YES' ELSE 'NO' END AS is_primary_key
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = %s
+      AND TABLE_SCHEMA = DATABASE()
+    ORDER BY ORDINAL_POSITION
+"""
 
 
 @mcp.tool()
@@ -69,33 +180,34 @@ async def memory_db(
     query: str = None,
     table: str = None,
     limit: int = 100,
-    ctx: Context = None
+    ctx: Context = None,
 ) -> str:
     """
-    Query external databases (read-only). Use for data analysis, debugging, and verification.
+    Query external databases (read-only). Supports mssql and mysql.
 
     Actions:
 
-    action="list" - List available databases
-        No params required.
+    action="list" - List available databases with their types
+        No params required. Returns name, type (mssql/mysql), host, etc.
 
     action="schema" - Explore database schema
         Required: database
         Optional: table (show columns for specific table)
-        Without table: lists all tables. With table: shows columns, types, nullability.
+        Without table: lists all tables. With table: shows columns.
 
     action="query" - Run a SELECT query
         Required: database, query
-        Optional: limit (default 100, max 500)
-        Only SELECT/WITH statements allowed. No INSERT/UPDATE/DELETE/DROP.
+        Optional: limit (default 100, max configured per-database)
+        Only SELECT/WITH statements allowed. Dialect-aware keyword blocking.
 
     Args:
         session_id: Your session ID
         action: One of: list, schema, query
-        database: Database name (e.g., "nimbus")
-        query: SQL SELECT query to execute
+        database: Database name from DB_REGISTRY (see action="list")
+        query: SQL SELECT query — mind dialect differences:
+               MSSQL uses TOP/brackets, MySQL uses LIMIT/backticks
         table: Table name for schema exploration
-        limit: Max rows to return (default 100, max 500)
+        limit: Max rows to return (default 100)
     """
     error = require_session(session_id)
     if error:
@@ -115,9 +227,17 @@ async def memory_db(
             })
         return json.dumps({"count": len(databases), "databases": databases}, indent=2)
 
-    # All other actions require database
     if not database:
         return json.dumps({"error": "database parameter required"})
+
+    if database not in DB_REGISTRY:
+        return json.dumps({
+            "error": f"Database '{database}' not registered",
+            "available": list(DB_REGISTRY.keys()),
+        })
+
+    config = DB_REGISTRY[database]
+    db_type = config["type"]
 
     # -- SCHEMA --
     if action == "schema":
@@ -128,56 +248,37 @@ async def memory_db(
         try:
             cursor = conn.cursor()
             if table:
-                # Show columns for specific table
-                cursor.execute("""
-                    SELECT
-                        c.COLUMN_NAME as name,
-                        c.DATA_TYPE as type,
-                        c.CHARACTER_MAXIMUM_LENGTH as max_length,
-                        c.IS_NULLABLE as nullable,
-                        c.COLUMN_DEFAULT as default_value,
-                        CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 'YES' ELSE 'NO' END as is_primary_key
-                    FROM INFORMATION_SCHEMA.COLUMNS c
-                    LEFT JOIN (
-                        SELECT ku.COLUMN_NAME, ku.TABLE_NAME
-                        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-                        JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
-                            ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
-                        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
-                    ) pk ON pk.TABLE_NAME = c.TABLE_NAME AND pk.COLUMN_NAME = c.COLUMN_NAME
-                    WHERE c.TABLE_NAME = %s
-                    ORDER BY c.ORDINAL_POSITION
-                """, (table,))
+                columns_sql = (
+                    _TABLE_COLUMNS_MSSQL if db_type == "mssql" else _TABLE_COLUMNS_MYSQL
+                )
+                cursor.execute(columns_sql, (table,))
                 columns = cursor.fetchall()
                 if not columns:
                     return json.dumps({"error": f"Table '{table}' not found"})
                 return json.dumps({
                     "database": database,
+                    "type": db_type,
                     "table": table,
                     "column_count": len(columns),
-                    "columns": columns
+                    "columns": columns,
                 }, indent=2)
             else:
-                # List all tables with row counts and schema
-                cursor.execute("""
-                    SELECT
-                        t.TABLE_SCHEMA as [schema],
-                        t.TABLE_NAME as name,
-                        t.TABLE_SCHEMA + '.' + t.TABLE_NAME as qualified_name,
-                        p.rows as row_count
-                    FROM INFORMATION_SCHEMA.TABLES t
-                    LEFT JOIN sys.partitions p
-                        ON p.object_id = OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME)
-                        AND p.index_id IN (0, 1)
-                    WHERE t.TABLE_TYPE = 'BASE TABLE'
-                    ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME
-                """)
+                tables_sql = (
+                    _TABLE_LIST_MSSQL if db_type == "mssql" else _TABLE_LIST_MYSQL
+                )
+                cursor.execute(tables_sql)
                 tables = cursor.fetchall()
+                qualified_example = (
+                    "qualified_name (e.g., picFrame.Frames)"
+                    if db_type == "mssql"
+                    else "qualified_name (e.g., nimbus.frames) — MySQL uses backticks for identifiers"
+                )
                 return json.dumps({
                     "database": database,
+                    "type": db_type,
                     "table_count": len(tables),
-                    "note": "Use qualified_name (e.g., picFrame.Frames) in queries",
-                    "tables": tables
+                    "note": f"Use {qualified_example} in queries",
+                    "tables": tables,
                 }, indent=2)
         except Exception as e:
             return json.dumps({"error": f"Schema query failed: {str(e)}"})
@@ -189,15 +290,11 @@ async def memory_db(
         if not query:
             return json.dumps({"error": "query parameter required"})
 
-        config = DB_REGISTRY[database]
-
-        # Enforce read-only
         if config.get("read_only", True):
-            validation_error = _validate_sql_readonly(query)
+            validation_error = _validate_sql_readonly(query, db_type)
             if validation_error:
                 return json.dumps({"error": validation_error})
 
-        # Cap limit
         max_rows = config.get("max_rows", 500)
         if limit > max_rows:
             limit = max_rows
@@ -209,13 +306,11 @@ async def memory_db(
         try:
             cursor = conn.cursor()
             cursor.execute(query)
-            rows = cursor.fetchmany(limit + 1)  # Fetch one extra to detect truncation
-
+            rows = cursor.fetchmany(limit + 1)
             truncated = len(rows) > limit
             if truncated:
                 rows = rows[:limit]
 
-            # Convert any non-serializable types
             clean_rows = []
             for row in rows:
                 clean = {}
@@ -232,12 +327,14 @@ async def memory_db(
 
             result = {
                 "database": database,
+                "type": db_type,
                 "row_count": len(clean_rows),
                 "truncated": truncated,
-                "rows": clean_rows
+                "rows": clean_rows,
             }
             if truncated:
-                result["note"] = f"Results truncated to {limit} rows. Use LIMIT/TOP or narrow your WHERE clause."
+                hint = "LIMIT" if db_type == "mysql" else "TOP or LIMIT"
+                result["note"] = f"Results truncated to {limit} rows. Use {hint} or narrow your WHERE clause."
 
             return json.dumps(result, indent=2)
         except Exception as e:

@@ -28,6 +28,8 @@ MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
 # Example: DB_MYDB_TYPE=mssql, DB_MYDB_HOST=server.com, DB_MYDB_PORT=1433, etc.
 DB_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
+_DEFAULT_PORTS = {"mssql": 1433, "mysql": 3306}
+
 def _build_db_registry():
     """Build DB_REGISTRY from DB_<NAME>_TYPE env vars."""
     seen = set()
@@ -37,10 +39,12 @@ def _build_db_registry():
             if name not in seen:
                 seen.add(name)
                 prefix = f"DB_{name.upper()}_"
+                db_type = os.getenv(f"{prefix}TYPE", "mssql").lower()
+                default_port = _DEFAULT_PORTS.get(db_type, 1433)
                 DB_REGISTRY[name] = {
-                    "type": os.getenv(f"{prefix}TYPE", "mssql"),
+                    "type": db_type,
                     "host": os.getenv(f"{prefix}HOST", ""),
-                    "port": int(os.getenv(f"{prefix}PORT", "1433")),
+                    "port": int(os.getenv(f"{prefix}PORT", str(default_port))),
                     "database": os.getenv(f"{prefix}NAME", ""),
                     "user": os.getenv(f"{prefix}USER", ""),
                     "password": os.getenv(f"{prefix}PASS", ""),
@@ -51,11 +55,23 @@ def _build_db_registry():
 
 _build_db_registry()
 
-# SQL keywords that are NEVER allowed in read-only mode
+# SQL keywords that are NEVER allowed in read-only mode — applies to all dialects
 SQL_BLOCKED_KEYWORDS = re.compile(
     r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|EXEC|EXECUTE|MERGE|'
-    r'GRANT|REVOKE|DENY|BACKUP|RESTORE|SHUTDOWN|KILL|RECONFIGURE|'
-    r'DBCC|BULK|OPENROWSET|OPENQUERY|xp_|sp_)\b',
+    r'GRANT|REVOKE|DENY|BACKUP|RESTORE|SHUTDOWN|KILL|RECONFIGURE)\b',
+    re.IGNORECASE
+)
+
+# MSSQL-specific bad keywords — xp_/sp_ procedures, OPENROWSET, etc.
+SQL_BLOCKED_KEYWORDS_MSSQL = re.compile(
+    r'\b(DBCC|BULK|OPENROWSET|OPENQUERY|xp_|sp_)\b',
+    re.IGNORECASE
+)
+
+# MySQL-specific bad keywords — file I/O, LOAD DATA, user-defined functions
+SQL_BLOCKED_KEYWORDS_MYSQL = re.compile(
+    r'\b(LOAD_FILE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE|'
+    r'BENCHMARK|SLEEP|RENAME\s+TABLE|HANDLER|LOCK\s+TABLES)\b',
     re.IGNORECASE
 )
 

@@ -45,7 +45,7 @@ There are 370+ MCP memory servers listed on PulseMCP. Most give a single agent p
 | Behavioral guidelines | No | Yes — Set rules once, every agent on every machine receives them |
 | Staleness management | No | Yes — Age warnings, supersede, archive, bulk cleanup by tag |
 | Librarian mode | No | Yes — Agents analyze source code and enrich the knowledge base |
-| External database access | No | Yes — Read-only SQL queries (MSSQL) against your project databases |
+| External database access | No | Yes — Read-only SQL queries (MSSQL, MySQL) against your project databases |
 | Checklists | No | Yes — Shared launch readiness, deploy steps, etc. |
 
 40 tools across 14 categories. Not a toy — a coordination system.
@@ -345,7 +345,7 @@ All configuration is via environment variables. See `.env.example` for the compl
 | `MCP_AUTH_ENABLED` | `false` | Enable API key authentication. When true, `memory_start_session` requires a valid `api_key`. |
 | `ANTHROPIC_API_KEY` | -- | Required only for the standalone librarian enrichment service. |
 | `LIBRARIAN_PROJECT_ROOTS` | -- | JSON map of project names to filesystem paths for librarian code analysis. |
-| `DB_<NAME>_TYPE` | -- | Register an external database. Supported: `mssql`. See `.env.example` for full pattern. |
+| `DB_<NAME>_TYPE` | -- | Register an external database. Supported: `mssql`, `mysql`. See `.env.example` for full pattern. |
 | `DB_<NAME>_HOST` | -- | External database hostname. |
 | `DB_<NAME>_PORT` | `1433` | External database port. |
 | `DB_<NAME>_NAME` | -- | External database name. |
@@ -520,7 +520,7 @@ See [docs/WORKED_EXAMPLE.md](docs/WORKED_EXAMPLE.md) for a walkthrough of two ag
 Contributions welcome! These are known gaps that would benefit the project:
 
 - ~~**Authentication and tenant isolation**~~ — Done! API keys with RBAC and project scoping. See [Security](#security).
-- **PostgreSQL and MySQL support** — the `memory_db` tool currently supports MSSQL only
+- **PostgreSQL support** — the `memory_db` tool supports MSSQL and MySQL. PostgreSQL not yet implemented.
 - **Local model support for librarian** — Ollama integration so the enrichment daemon doesn't require a cloud API key
 - **TTL and stale data cleanup** — background pruning of expired sessions, locks, and messages with configurable retention
 - **Data export/backup tooling** — dump and restore scripts for migration and disaster recovery
