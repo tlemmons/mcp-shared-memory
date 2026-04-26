@@ -6,12 +6,16 @@ Optional API key authentication for the MCP server. When enabled
 Roles:
     owner    - Full access, can manage API keys and guidelines, all projects
     admin    - Can manage backlog, specs, functions, messaging, all projects
+    user     - Human-driven dashboard/CLI access; broader read across projects
+               and ability to send messages, but cannot manage keys or guidelines.
+               Use for the future ClaudeTerminal phone/web dashboard and similar
+               human-originated tooling.
     agent    - Standard agent access, scoped to assigned projects
     readonly - Query and search only, no writes
 
 Tenant isolation:
     Each API key can be scoped to specific projects. An empty project list
-    means access to all projects (for owner/admin roles).
+    means access to all projects (for owner/admin/user roles).
 """
 
 import hashlib
@@ -24,23 +28,25 @@ from shared_memory.helpers import utc_now
 # Whether auth is required (opt-in)
 AUTH_ENABLED = os.getenv("MCP_AUTH_ENABLED", "").lower() in ("true", "1", "yes")
 
-# Roles ordered by privilege level
-ROLES = ["readonly", "agent", "admin", "owner"]
+# Roles ordered by privilege level (user sits between agent and admin —
+# broader cross-project read, can send messages, but no key/guideline management)
+ROLES = ["readonly", "agent", "user", "admin", "owner"]
 
 # Permission matrix: which roles can perform which operation categories
 PERMISSIONS: Dict[str, List[str]] = {
-    "session.start":    ["readonly", "agent", "admin", "owner"],
-    "session.end":      ["readonly", "agent", "admin", "owner"],
-    "query":            ["readonly", "agent", "admin", "owner"],
-    "store":            ["agent", "admin", "owner"],
-    "backlog":          ["agent", "admin", "owner"],
-    "messaging":        ["agent", "admin", "owner"],
+    "session.start":    ["readonly", "agent", "user", "admin", "owner"],
+    "session.end":      ["readonly", "agent", "user", "admin", "owner"],
+    "query":            ["readonly", "agent", "user", "admin", "owner"],
+    "store":            ["agent", "user", "admin", "owner"],
+    "backlog":          ["agent", "user", "admin", "owner"],
+    "messaging":        ["agent", "user", "admin", "owner"],
     "locking":          ["agent", "admin", "owner"],
     "functions":        ["agent", "admin", "owner"],
     "specs":            ["agent", "admin", "owner"],
     "lifecycle":        ["agent", "admin", "owner"],
-    "checklists":       ["agent", "admin", "owner"],
-    "database":         ["agent", "admin", "owner"],
+    "checklists":       ["agent", "user", "admin", "owner"],
+    "database":         ["agent", "user", "admin", "owner"],
+    "autopilot":        ["user", "admin", "owner"],
     "guidelines":       ["admin", "owner"],
     "admin":            ["owner"],
 }

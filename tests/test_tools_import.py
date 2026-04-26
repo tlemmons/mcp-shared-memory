@@ -1,14 +1,14 @@
 """Tests that all tools register correctly."""
 
 
-def test_all_39_tools_register():
-    """All 39 tools are registered with the MCP server."""
+def test_all_tools_register():
+    """All 45 tools are registered with the MCP server."""
     from shared_memory.app import create_app
 
     mcp = create_app()
     tools = mcp._tool_manager._tools
 
-    assert len(tools) == 41, f"Expected 41 tools, got {len(tools)}: {sorted(tools.keys())}"
+    assert len(tools) == 45, f"Expected 45 tools, got {len(tools)}: {sorted(tools.keys())}"
 
 
 def test_expected_tools_present():
@@ -28,6 +28,9 @@ def test_expected_tools_present():
         "memory_project", "memory_checklist", "memory_db",
         "memory_define_spec", "memory_list_agents", "memory_guidelines",
         "memory_admin",
+        # Phase C1
+        "memory_set_autopilot", "memory_pause_autopilot",
+        "memory_autopilot_status", "memory_autopilot_digest",
     }
 
     missing = expected - tools

@@ -182,6 +182,17 @@ def get_mongo():
         compact_col.create_index([("agent", 1), ("logged_at", -1)])
         compact_col.create_index("logged_at")
 
+        # Autopilot config — one doc per (project, agent), introduced in Phase C1
+        # for ClaudeTerminal channel-plugin integration.
+        autopilot_col = _mongo_db.agent_autopilot
+        autopilot_col.create_index([("project", 1), ("agent", 1)], unique=True)
+
+        # New message indexes for chain semantics — chain_depth lets us enforce
+        # the depth-5 hard cap efficiently; in_response_to lets us walk threads.
+        messages_col = _mongo_db.messages
+        messages_col.create_index("chain_depth")
+        messages_col.create_index("in_response_to")
+
         print(f"Connected to MongoDB at {MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}")
         return _mongo_db
 

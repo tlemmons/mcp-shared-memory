@@ -1,6 +1,7 @@
 """Inter-agent messaging tools - send/receive messages, agent status, discovery."""
 
 import json
+import re
 import uuid
 from datetime import timedelta
 from typing import Dict, List
@@ -75,6 +76,20 @@ def get_pending_messages_for_instance(instance_name: str, project: str = None) -
     return messages
 
 
+# Phase C1: destructive content gate. Body containing any of these keywords
+# automatically gets require_human=True so autopilot never auto-acts on it.
+# Pattern is intentionally broad — false positives (require_human=True for a
+# benign message that mentions "delete") are cheap, false negatives are not.
+_DESTRUCTIVE_KEYWORDS = re.compile(
+    r"\b(DELETE|DROP|TRUNCATE|deploy|production|prod\b)\b|git\s+push\s+(--force|-f)\b",
+    re.IGNORECASE,
+)
+
+# Phase C1: hard cap on auto-relay chains. Anything arriving with chain_depth
+# above this is dropped with a system-message alert to coordinator.
+CHAIN_DEPTH_HARD_CAP = 5
+
+
 @mcp.tool()
 async def memory_send_message(
     session_id: str,
@@ -84,6 +99,9 @@ async def memory_send_message(
     category: str = "info",
     to_project: str = None,
     reply_to: str = None,
+    in_response_to: str = None,
+    chain_depth: int = None,
+    require_human: bool = False,
     ctx: Context = None
 ) -> str:
     """
@@ -107,6 +125,14 @@ async def memory_send_message(
             blocker - STOP work until discussed with coordinator or user
         to_project: Target project (defaults to your project; use for cross-project notes)
         reply_to: Note ID this is replying to (for threading conversations)
+        in_response_to: Message ID this is a programmatic auto-response to (Phase C autopilot).
+            If set, server computes chain_depth = parent.chain_depth + 1.
+        chain_depth: Override chain depth (Phase C autopilot). Server takes the
+            max of (parent_depth+1, caller-provided). Hard-capped at 5; messages
+            above the cap are dropped with an alert.
+        require_human: Force human review on the recipient side. Always True for
+            messages whose body matches the destructive-keyword regex (DELETE,
+            DROP, TRUNCATE, deploy, production, git push --force).
     """
     error = require_session(session_id)
     if error:
@@ -172,6 +198,62 @@ async def memory_send_message(
             "existing_message_id": existing_msg["_id"]
         })
 
+    # ── Phase C1: chain depth math ──
+    # Final depth is max(parent.chain_depth + 1, caller-provided chain_depth, 0).
+    # When neither parent nor caller provide a value, defaults to 0 (this is
+    # the natural value for human-originated and top-of-chain agent messages).
+    parent_depth = -1  # so parent_depth + 1 == 0 when no parent
+    if in_response_to:
+        parent = db.messages.find_one({"_id": in_response_to}, {"chain_depth": 1})
+        if parent and isinstance(parent.get("chain_depth"), int):
+            parent_depth = parent["chain_depth"]
+    caller_depth = chain_depth if isinstance(chain_depth, int) else 0
+    final_depth = max(parent_depth + 1, caller_depth, 0)
+
+    # Hard cap — drop and alert. Coordinator gets a system message so the
+    # runaway loop is visible without breaking the calling agent's tool flow.
+    if final_depth > CHAIN_DEPTH_HARD_CAP:
+        try:
+            coordinator = db.registered_agents.find_one({
+                "project": normalized_project if registered_project else target_project,
+                "tier": "admin",
+            })
+            if coordinator:
+                db.messages.insert_one({
+                    "_id": f"msg_{uuid.uuid4().hex[:12]}",
+                    "from_instance": "system",
+                    "from_project": normalized_project if registered_project else target_project,
+                    "to_instance": coordinator["name"],
+                    "to_project": normalized_project if registered_project else target_project,
+                    "message": (
+                        f"CHAIN-DEPTH ALERT: dropped a message from "
+                        f"{session_info['claude_instance']}@{from_project} "
+                        f"to {to_instance}@{target_project} at depth {final_depth} "
+                        f"(cap is {CHAIN_DEPTH_HARD_CAP}). Likely autopilot loop. "
+                        f"Investigate and consider memory_pause_autopilot."
+                    ),
+                    "priority": "urgent",
+                    "category": "blocker",
+                    "status": "pending",
+                    "chain_depth": 0,
+                    "require_human": True,
+                    "created_at": now,
+                })
+        except Exception:
+            pass  # alert is best-effort; do not let it block the drop response
+        return json.dumps({
+            "error": f"chain_depth {final_depth} exceeds hard cap {CHAIN_DEPTH_HARD_CAP}",
+            "dropped": True,
+            "alert_sent": True,
+        })
+
+    # ── Phase C1: destructive content gate ──
+    # Always force require_human=True if the body contains destructive keywords,
+    # even if the caller passed False. False positives are cheap; missing one
+    # destructive auto-action is not.
+    body_is_destructive = bool(_DESTRUCTIVE_KEYWORDS.search(message))
+    final_require_human = bool(require_human) or body_is_destructive
+
     # ── Build and store message ──
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
 
@@ -186,11 +268,15 @@ async def memory_send_message(
         "priority": priority,
         "category": category,
         "reply_to": reply_to,
+        "in_response_to": in_response_to,
+        "chain_depth": final_depth,
+        "require_human": final_require_human,
+        "user_originated": session_info.get("claude_instance", "").startswith("user-"),
         "status": "pending",
         "created_at": now,
         "delivered_at": None,
         "received_at": None,
-        "completed_at": None
+        "completed_at": None,
     }
 
     db.messages.insert_one(msg_doc)
@@ -204,7 +290,11 @@ async def memory_send_message(
         "priority": priority,
         "category": category,
         "reply_to": reply_to,
-        "persisted": True
+        "in_response_to": in_response_to,
+        "chain_depth": final_depth,
+        "require_human": final_require_human,
+        "destructive_match": body_is_destructive,
+        "persisted": True,
     })
 
 
@@ -267,9 +357,14 @@ async def memory_get_messages(
             "priority": doc.get("priority", "normal"),
             "status": doc.get("status", "?"),
             "created": doc["created_at"].isoformat() if doc.get("created_at") else (doc["created"].isoformat() if doc.get("created") else None),
+            "chain_depth": doc.get("chain_depth", 0),
+            "require_human": bool(doc.get("require_human", False)),
+            "user_originated": bool(doc.get("user_originated", False)),
         }
         if doc.get("reply_to"):
             entry["reply_to"] = doc["reply_to"]
+        if doc.get("in_response_to"):
+            entry["in_response_to"] = doc["in_response_to"]
         return json.dumps({"count": 1, "messages": [entry]})
 
     # ── Admin/coordinator querying for another agent's messages ──
@@ -325,10 +420,15 @@ async def memory_get_messages(
             "priority": doc.get("priority", "normal"),
             "status": doc.get("status", "pending"),
             "created": created_at,
-            "delivered": doc.get("status", "pending") != "pending"
+            "delivered": doc.get("status", "pending") != "pending",
+            "chain_depth": doc.get("chain_depth", 0),
+            "require_human": bool(doc.get("require_human", False)),
+            "user_originated": bool(doc.get("user_originated", False)),
         }
         if doc.get("reply_to"):
             entry["reply_to"] = doc["reply_to"]
+        if doc.get("in_response_to"):
+            entry["in_response_to"] = doc["in_response_to"]
         messages.append(entry)
 
     # Sort by priority then created
