@@ -187,6 +187,19 @@ def get_mongo():
         autopilot_col = _mongo_db.agent_autopilot
         autopilot_col.create_index([("project", 1), ("agent", 1)], unique=True)
 
+        # Autopilot events — Phase C2 budget enforcement. One doc per
+        # auto-processed message. TTL of 1 hour means rolling-window count
+        # is just a count_documents call. Mongo's TTL monitor reaps expired
+        # docs every ~60s so the count is approximate at the second-by-second
+        # level; that's fine for budget gating.
+        autopilot_events_col = _mongo_db.autopilot_events
+        autopilot_events_col.create_index(
+            "logged_at", expireAfterSeconds=3600
+        )
+        autopilot_events_col.create_index(
+            [("project", 1), ("agent", 1), ("logged_at", -1)]
+        )
+
         # New message indexes for chain semantics — chain_depth lets us enforce
         # the depth-5 hard cap efficiently; in_response_to lets us walk threads.
         messages_col = _mongo_db.messages

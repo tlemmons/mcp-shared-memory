@@ -1,10 +1,11 @@
-"""Autopilot tools (Phase C1) — per-(project, agent) auto-relay configuration.
+"""Autopilot tools — per-(project, agent) auto-relay configuration.
 
-Phase C1 ships the CRUD surface only: set/pause/status/digest. The actual
-budget enforcement (rolling 1-hour count + auto-disable on breach) ships in
-Phase C2. Until then `enabled=True` is advisory — it tells channel plugins
-they can auto-process inbound messages, but the server does not yet count
-or reject auto-traffic.
+Phase C1: CRUD surface (set/pause/status/digest).
+Phase C2: budget enforcement via memory_autopilot_check_budget. Channel
+plugins call this immediately before auto-processing a message; the server
+counts the auto-event and returns whether autopilot is still allowed. On
+budget breach, server auto-disables autopilot for that (project, agent)
+pair and sends a system message to the agent's inbox.
 
 Configuration is a single document per (project, agent) in `agent_autopilot`:
     {
@@ -21,6 +22,7 @@ Configuration is a single document per (project, agent) in `agent_autopilot`:
 """
 
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import Context
@@ -314,4 +316,192 @@ async def memory_autopilot_digest(
             "current_config": {k: _format_dt(v) for k, v in config.items()},
         },
         indent=2,
+    )
+
+
+@mcp.tool()
+async def memory_autopilot_check_budget(
+    session_id: str,
+    project: str,
+    agent: str,
+    message_id: str = None,
+    chain_depth: int = 0,
+    require_human: bool = False,
+    ctx: Context = None,
+) -> str:
+    """
+    Check budget + record an auto-processing event in one atomic call.
+
+    Channel plugins (e.g., ClaudeTerminal cterm-inbox) call this IMMEDIATELY
+    before auto-processing a message. Returns:
+        {allowed: bool, reason: str, current_count: int, hourly_budget: int,
+         depth_cap: int, depth_breach: bool, destructive_block: bool}
+
+    The server counts every call (whether allowed or not) so observability
+    of attempted breaches is preserved. Auto-disable happens when count
+    EXCEEDS hourly_budget — server flips enabled=False, writes paused_at,
+    and sends a system blocker message to the agent's inbox.
+
+    Decision matrix:
+      - autopilot disabled       → allowed=False, no count increment
+      - destructive_gate=True    → allowed=False if require_human (no increment)
+      - chain_depth > depth_cap  → allowed=False (counted, breach noted)
+      - count >= hourly_budget   → allowed=False, AUTO-DISABLE side-effect
+      - otherwise                → allowed=True, count incremented
+
+    Args:
+        session_id: Your session ID
+        project: Target (project, agent) pair
+        agent: Target (project, agent) pair
+        message_id: The message about to be auto-processed (logged for audit)
+        chain_depth: chain_depth of the message (compared against depth_cap)
+        require_human: require_human flag of the message (gated by destructive_gate)
+    """
+    error = require_session(session_id)
+    if error:
+        return error
+
+    db = get_mongo()
+    if db is None:
+        return json.dumps({"error": "MongoDB unavailable"})
+
+    config = _autopilot_config(db, project, agent)
+    now = utc_now()
+
+    # Gate 1: autopilot must be enabled
+    if not config["enabled"]:
+        return json.dumps(
+            {
+                "allowed": False,
+                "reason": "autopilot disabled",
+                "current_count": 0,
+                "hourly_budget": config["hourly_budget"],
+                "depth_cap": config["depth_cap"],
+                "depth_breach": False,
+                "destructive_block": False,
+            }
+        )
+
+    # Gate 2: destructive content always blocks if destructive_gate is on
+    if config["destructive_gate"] and bool(require_human):
+        # Don't count: this is a "this needs a human" decision, not a budget event
+        return json.dumps(
+            {
+                "allowed": False,
+                "reason": "destructive_gate blocked require_human message",
+                "current_count": 0,
+                "hourly_budget": config["hourly_budget"],
+                "depth_cap": config["depth_cap"],
+                "depth_breach": False,
+                "destructive_block": True,
+            }
+        )
+
+    # Gate 3: depth cap (counted as an attempted auto-process)
+    depth_breach = int(chain_depth or 0) > config["depth_cap"]
+
+    # Count first so attempted breaches are visible in metrics
+    cutoff = now - timedelta(hours=1)
+    db.autopilot_events.insert_one(
+        {
+            "_id": f"ape_{uuid.uuid4().hex[:12]}",
+            "project": project,
+            "agent": agent,
+            "message_id": message_id,
+            "chain_depth": int(chain_depth or 0),
+            "require_human": bool(require_human),
+            "depth_breach": depth_breach,
+            "logged_at": now,
+        }
+    )
+    current_count = db.autopilot_events.count_documents(
+        {"project": project, "agent": agent, "logged_at": {"$gte": cutoff}}
+    )
+
+    if depth_breach:
+        return json.dumps(
+            {
+                "allowed": False,
+                "reason": f"chain_depth {chain_depth} exceeds depth_cap {config['depth_cap']}",
+                "current_count": current_count,
+                "hourly_budget": config["hourly_budget"],
+                "depth_cap": config["depth_cap"],
+                "depth_breach": True,
+                "destructive_block": False,
+            }
+        )
+
+    # Gate 4: budget. Auto-disable on breach.
+    budget_breached = current_count > config["hourly_budget"]
+    if budget_breached:
+        # Atomic flip — multiple concurrent breaches just race to set the same fields
+        db.agent_autopilot.update_one(
+            {"project": project, "agent": agent},
+            {
+                "$set": {
+                    "enabled": False,
+                    "paused_at": now,
+                    "paused_reason": (
+                        f"hourly budget breached: {current_count} auto-processes "
+                        f"in last hour > budget {config['hourly_budget']}"
+                    ),
+                    "updated": now,
+                    "updated_by": "system:autopilot-budget",
+                }
+            },
+        )
+        # System notification to the agent — uses send_message-style insert directly
+        # to avoid recursive memory_send_message overhead and dedup guards.
+        try:
+            db.messages.insert_one(
+                {
+                    "_id": f"msg_{uuid.uuid4().hex[:12]}",
+                    "from_instance": "system",
+                    "from_project": project,
+                    "to_instance": agent,
+                    "to_project": project,
+                    "message": (
+                        f"AUTOPILOT AUTO-DISABLED: hourly budget breached "
+                        f"({current_count} auto-processes in last hour > "
+                        f"budget {config['hourly_budget']}). "
+                        f"Use memory_set_autopilot(enabled=True) to resume "
+                        f"after reviewing recent activity with "
+                        f"memory_autopilot_digest."
+                    ),
+                    "priority": "urgent",
+                    "category": "blocker",
+                    "status": "pending",
+                    "chain_depth": 0,
+                    "require_human": True,
+                    "user_originated": False,
+                    "created_at": now,
+                }
+            )
+        except Exception:
+            pass  # alert is best-effort
+
+        return json.dumps(
+            {
+                "allowed": False,
+                "reason": "hourly budget breached — autopilot auto-disabled",
+                "current_count": current_count,
+                "hourly_budget": config["hourly_budget"],
+                "depth_cap": config["depth_cap"],
+                "depth_breach": False,
+                "destructive_block": False,
+                "auto_disabled": True,
+            }
+        )
+
+    # Allowed
+    return json.dumps(
+        {
+            "allowed": True,
+            "reason": "ok",
+            "current_count": current_count,
+            "hourly_budget": config["hourly_budget"],
+            "depth_cap": config["depth_cap"],
+            "depth_breach": False,
+            "destructive_block": False,
+        }
     )
