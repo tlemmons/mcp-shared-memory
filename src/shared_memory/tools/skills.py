@@ -215,6 +215,17 @@ async def memory_register_skill(
     body_hash = _skill_body_hash(name, trigger, preconditions, steps, gotchas)
 
     existing = skills_col.find_one({"_id": skill_id})
+    if not existing:
+        # Legacy skills created before the current _skill_id() formula carry a
+        # non-matching _id (e.g. parking = skill_39c35f43227d vs formula
+        # skill_6dc0c0347439). The unique (project, name) index is the real
+        # identity, so fall back to it — otherwise an owner edit misses the doc,
+        # falls through to insert_one, and dup-keys on (project, name). Target
+        # the real _id so the update lands. (learning on skills-legacy-id.)
+        legacy = skills_col.find_one({"project": project or "", "name": name})
+        if legacy:
+            existing = legacy
+            skill_id = legacy["_id"]
 
     if existing:
         # Owner-only edits (mirrors specs.py). Human/admin may also edit.
